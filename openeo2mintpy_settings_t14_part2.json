@@ -1,0 +1,21 @@
+{
+  "openeo_dir": "/mnt/w/tubitak3501_merzifon/outputs/track_14_ascending_part2",
+  "unw_out_dir": "/mnt/w/tubitak3501_merzifon/outputs/track_14_processed/unw",
+  "cor_out_dir": "/mnt/w/tubitak3501_merzifon/outputs/track_14_processed/cor",
+  "unw_dir": "/mnt/w/tubitak3501_merzifon/outputs/track_14_processed/unw",
+  "cor_dir": "/mnt/w/tubitak3501_merzifon/outputs/track_14_processed/cor",
+  "conncomp_dir": "",
+  "baseline_dir": "",
+  "ref_xml": "",
+  "ref_date": "",
+  "geometry_dir": "",
+  "dem_file": "/mnt/w/tubitak3501_merzifon/outputs/track_14_processed/dem.tif",
+  "inc_angle_file": "",
+  "az_angle_file": "",
+  "lookup_y_file": "",
+  "lookup_x_file": "",
+  "water_mask_file": "",
+  "mintpy_processor": "hyp3",
+  "work_dir": "/mnt/w/tubitak3501_merzifon/outputs/track_14_processed",
+  "geometry_mode": "geo"
+}
