@@ -695,6 +695,7 @@ class OpenEO2MintpyApp(tk.Tk):
     def _run_split_worker(self, openeo_dir: str, unw_out_dir: str, cor_out_dir: str) -> None:
         try:
             from openeo2mintpy.split import split_openeo_bands
+            from openeo2mintpy.align import align_rasters
 
             def progress_cb(current: int, total: int) -> None:
                 pct = (current / total * 100.0) if total else 0.0
@@ -703,6 +704,8 @@ class OpenEO2MintpyApp(tk.Tk):
             def log_cb(message: str) -> None:
                 self._log_queue.put(message)
 
+            # ── Phase 1/2: Split bands ──
+            self._log_queue.put("═══ Phase 1/2: Splitting openEO bands ═══")
             result = split_openeo_bands(
                 input_dir=openeo_dir,
                 unw_dir=unw_out_dir,
@@ -711,17 +714,36 @@ class OpenEO2MintpyApp(tk.Tk):
                 log_callback=log_cb,
             )
 
-            self._log_queue.put(f"Processed {result['processed']} files.")
+            self._log_queue.put(f"Split completed: {result['processed']} files.")
             if result['errors']:
-                self._log_queue.put(f"Encountered {len(result['errors'])} errors:")
+                self._log_queue.put(f"Encountered {len(result['errors'])} split errors:")
                 for err in result['errors'][:10]:
                     self._log_queue.put(f"  ! {err['file']}: {err['error']}")
                 if len(result['errors']) > 10:
                     self._log_queue.put(f"  ... and {len(result['errors']) - 10} more errors.")
 
+            if result['processed'] == 0:
+                self._log_queue.put("No files were split. Skipping alignment.")
+                self._log_queue.put("__split_done__:error")
+                return
+
+            # ── Phase 2/2: Align rasters ──
+            self._log_queue.put("")
+            self._log_queue.put("═══ Phase 2/2: Aligning rasters to common grid ═══")
+            align_result = align_rasters(
+                unw_dir=unw_out_dir,
+                cor_dir=cor_out_dir,
+                log_callback=log_cb,
+            )
+
+            self._log_queue.put(
+                f"Alignment completed: {align_result['aligned']} files aligned, "
+                f"{len(align_result['errors'])} errors."
+            )
+
             self._log_queue.put("__split_done__:ok")
         except Exception as exc:
-            logger.exception("Split run failed")
+            logger.exception("Split & Align run failed")
             self._log_queue.put(f"ERROR: {exc}")
             self._log_queue.put("__split_done__:error")
 
