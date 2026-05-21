@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Raster Alignment (`openeo2mintpy align`)**: Computes the spatial intersection of all unwrapped phase and coherence GeoTIFFs, and resamples them all to the same grid in-place using GDAL. Resolves varying raster dimensions from openEO InSAR tracks.
+- **DEM preparation (`openeo2mintpy prepare-dem`)**: Extracts, merges, and warps/aligns NASADEM tiles to match the exact extent, resolution, and CRS of the InSAR stack, and generates the corresponding `.rsc` sidecar file automatically.
 - **Sensing-time and heading metadata** in every `.rsc` sidecar:
   - `HEADING` is always written as a numeric value (degrees clockwise
     from north). Uses the ISCE2 XML value when present, otherwise

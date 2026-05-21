@@ -29,10 +29,14 @@ graph TD
     A[openEO Sentinel-1 InSAR <br>3-Band GeoTIFFs] --> B(Step 1: Split Bands)
     B -->|Extract Band 2| C[Unwrapped Phase GeoTIFFs <br>YYYYMMDD_YYYYMMDD.unw.tif]
     B -->|Extract Band 3| D[Coherence GeoTIFFs <br>YYYYMMDD_YYYYMMDD.cor.tif]
-    C & D --> E(Step 2: Prepare Sidecars)
+    C & D --> C2(Step 1b: Align Stack)
+    C2 -->|openeo2mintpy align| C3[Aligned GeoTIFFs <br>Uniform shape & bounds]
+    C3 --> E(Step 2: Prepare Sidecars)
     E -->|Write RSC & config.txt| F[MintPy Input Stack]
-    F --> G(MintPy: load_data)
-    G --> H[HDF5 Files <br>ifgramStack.h5 / geometryRadar.h5]
+    H2[NASADEM Zip Tiles] --> G2(Step 2b: Prepare DEM)
+    G2 -->|openeo2mintpy prepare-dem| G3[Aligned DEM GeoTIFF & RSC]
+    G3 & F --> G(MintPy: load_data)
+    G --> H[HDF5 Files <br>ifgramStack.h5 / geometryGeo.h5]
     H --> I(Step 3: Fix Processor Attribute)
     I -->|Patch PROCESSOR hyp3 to isce| J[Time-Series Inversion & SBAS]
 ```
@@ -43,6 +47,8 @@ graph TD
 
 - **Band Splitting**: Extract Unwrapped Phase (Band 2) and Coherence (Band 3) from openEO output rasters.
 - **Smart Renaming**: Automatically maps openEO timestamp-based filenames to standard `YYYYMMDD_YYYYMMDD` formats.
+- **Raster Alignment**: Computes the spatial intersection of all stack rasters and warps/aligns them using GDAL to resolve differing dimensions.
+- **DEM Merging and Alignment**: Extracts, merges, and warps NASADEM tiles to match the exact extent, resolution, and CRS of the InSAR stack, and generates its sidecar `.rsc` file.
 - **ROI_PAC `.rsc` Sidecars**: Generates metadata sidecars required by MintPy's GDAL reader (including geometry, bounds, heading, wavelength, and orbits).
 - **Metadata Extraction**: Parses ISCE2 Reference XML files to auto-populate sensor and baseline parameters.
 - **HDF5 Processor Patch**: Fixes the `PROCESSOR` attribute from `hyp3` to `isce` in MintPy's generated HDF5 files to allow correct geometry lookup.
@@ -94,14 +100,33 @@ openeo2mintpy split \
     --unw-dir   ./unwrapped \
     --cor-dir   ./coherence
 
-# Step 2: Generate .rsc metadata sidecars and MintPy configuration
+# Step 1b: Align all split unwrapped phase and coherence rasters to a common grid
+# Resolves different dimensions due to orbital variations.
+openeo2mintpy align \
+    --unw-dir   ./unwrapped \
+    --cor-dir   ./coherence
+
+# Step 1c (Optional): Unzip, merge, and align NASADEM tiles to match InSAR grid
+openeo2mintpy prepare-dem \
+    --unw-dir     ./unwrapped \
+    --zip-dir     ./nasadem_downloads \
+    --output-file ./mintpy/dem.tif
+
+# Step 2: Generate .rsc metadata sidecars for the InSAR stack
 openeo2mintpy prepare \
     --unw-dir      ./unwrapped \
     --cor-dir      ./coherence \
     --baseline-dir ./baselines \
     --ref-xml      ./reference/IW2.xml \
-    --ref-date     20251124 \
-    --output-dir   ./mintpy
+    --ref-date     20251124
+
+# Step 2b: Generate MintPy configuration file (mintpy_config.txt)
+openeo2mintpy generate-config \
+    --work-dir     ./mintpy \
+    --unw-dir      ./unwrapped \
+    --cor-dir      ./coherence \
+    --dem-file     ./mintpy/dem.tif \
+    --processor    hyp3
 
 # (Run MintPy data loading)
 # smallbaselineApp.py ./mintpy/mintpy_config.txt --dostep load_data
@@ -135,6 +160,7 @@ sudo apt install python3-tk
 ```text
 openEO2Mintpy/
 ├── src/openeo2mintpy/
+│   ├── align.py           # Raster alignment & DEM preparation
 │   ├── cli.py             # CLI entry point
 │   ├── config.py          # MintPy config file generator
 │   ├── constants.py       # Global constants
