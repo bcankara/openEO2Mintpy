@@ -418,8 +418,8 @@ class OpenEO2MintpyApp(tk.Tk):
             banner,
             text=(
                 "Extracts Band 2 (Unwrapped Phase) and Band 3 (Coherence) from openEO GeoTIFFs. "
-                "Output files are renamed to 'YYYYMMDD_YYYYMMDD.unw.tif' and 'YYYYMMDD_YYYYMMDD.cor.tif' "
-                "to match MintPy expectations."
+                "Output files are renamed to 'YYYYMMDD_YYYYMMDD.unw.tif' "
+                "and 'YYYYMMDD_YYYYMMDD.cor.tif' to match MintPy expectations."
             ),
             style="Hint.TLabel",
             wraplength=760,
@@ -437,7 +437,7 @@ class OpenEO2MintpyApp(tk.Tk):
         openeo_var = tk.StringVar(value="")
         self._entries["openeo_dir"] = openeo_var
         ttk.Entry(form, textvariable=openeo_var).grid(row=0, column=1, sticky="ew", pady=4)
-        
+
         openeo_btns = ttk.Frame(form)
         openeo_btns.grid(row=0, column=2, sticky="e", padx=(6, 0), pady=4)
         openeo_browse = ttk.Button(
@@ -446,7 +446,7 @@ class OpenEO2MintpyApp(tk.Tk):
         )
         openeo_browse.pack(side="left")
         Tooltip(openeo_browse, "Select directory containing openEO 3-band GeoTIFF files.")
-        
+
         help0 = ttk.Label(openeo_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow")
         help0.pack(side="left", padx=(6, 0))
         Tooltip(help0, "Directory where openEO TIFFs (e.g. phase_coh_*.tif) are stored.")
@@ -458,7 +458,7 @@ class OpenEO2MintpyApp(tk.Tk):
         unw_out_var = tk.StringVar(value="")
         self._entries["unw_out_dir"] = unw_out_var
         ttk.Entry(form, textvariable=unw_out_var).grid(row=1, column=1, sticky="ew", pady=4)
-        
+
         unw_out_btns = ttk.Frame(form)
         unw_out_btns.grid(row=1, column=2, sticky="e", padx=(6, 0), pady=4)
         unw_out_browse = ttk.Button(
@@ -467,7 +467,7 @@ class OpenEO2MintpyApp(tk.Tk):
         )
         unw_out_browse.pack(side="left")
         Tooltip(unw_out_browse, "Select or create output directory for Unwrapped Phase files.")
-        
+
         help1 = ttk.Label(unw_out_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow")
         help1.pack(side="left", padx=(6, 0))
         Tooltip(help1, "Directory where the split single-band unwrapped phase TIFFs will be saved.")
@@ -479,7 +479,7 @@ class OpenEO2MintpyApp(tk.Tk):
         cor_out_var = tk.StringVar(value="")
         self._entries["cor_out_dir"] = cor_out_var
         ttk.Entry(form, textvariable=cor_out_var).grid(row=2, column=1, sticky="ew", pady=4)
-        
+
         cor_out_btns = ttk.Frame(form)
         cor_out_btns.grid(row=2, column=2, sticky="e", padx=(6, 0), pady=4)
         cor_out_browse = ttk.Button(
@@ -488,7 +488,7 @@ class OpenEO2MintpyApp(tk.Tk):
         )
         cor_out_browse.pack(side="left")
         Tooltip(cor_out_browse, "Select or create output directory for Coherence files.")
-        
+
         help2 = ttk.Label(cor_out_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow")
         help2.pack(side="left", padx=(6, 0))
         Tooltip(help2, "Directory where the split single-band coherence TIFFs will be saved.")
@@ -506,9 +506,14 @@ class OpenEO2MintpyApp(tk.Tk):
             action_bar, text="Save settings", command=self._save_settings_clicked
         )
         split_save_btn.pack(side="left", padx=(6, 0))
-        Tooltip(split_save_btn, f"Save the current form values to {SETTINGS_FILENAME} for future runs.")
+        Tooltip(
+            split_save_btn,
+            f"Save the current form values to {SETTINGS_FILENAME} for future runs.",
+        )
 
-        self.split_run_btn = ttk.Button(action_bar, text="Split Bands", command=self._run_split_clicked)
+        self.split_run_btn = ttk.Button(
+            action_bar, text="Split Bands", command=self._run_split_clicked
+        )
         self.split_run_btn.pack(side="right")
         Tooltip(self.split_run_btn, "Start extraction of Band 2 and Band 3 from openEO files.")
 
@@ -535,7 +540,10 @@ class OpenEO2MintpyApp(tk.Tk):
         next_frame.pack(fill="x", pady=(6, 0))
         ttk.Label(
             next_frame,
-            text="After a successful split, set 'Unwrapped directory' and 'Coherence directory' in the next tab to these output paths.",
+            text=(
+                "After a successful split, set 'Unwrapped directory' and 'Coherence directory' "
+                "in the next tab to these output paths."
+            ),
             style="Hint.TLabel",
         ).pack(anchor="w")
 
@@ -563,7 +571,7 @@ class OpenEO2MintpyApp(tk.Tk):
             errors.append("openEO input directory is required.")
         elif not Path(openeo_dir).is_dir():
             errors.append(f"openEO input directory does not exist: {openeo_dir}")
-        
+
         if not unw_out_dir:
             errors.append("Output unwrapped directory is required.")
         if not cor_out_dir:
@@ -612,7 +620,7 @@ class OpenEO2MintpyApp(tk.Tk):
                     self._log_queue.put(f"  ! {err['file']}: {err['error']}")
                 if len(result['errors']) > 10:
                     self._log_queue.put(f"  ... and {len(result['errors']) - 10} more errors.")
-            
+
             self._log_queue.put("__split_done__:ok")
         except Exception as exc:
             logger.exception("Split run failed")
@@ -1224,7 +1232,7 @@ class OpenEO2MintpyApp(tk.Tk):
                     self.split_progress.configure(value=100)
                     self.status_var.set("Split done.")
                     self.split_run_btn.configure(state="normal")
-                    
+
                     # Auto-populate the next tab's fields:
                     unw_out_dir = self._entries.get("unw_out_dir", "").get().strip()
                     cor_out_dir = self._entries.get("cor_out_dir", "").get().strip()
@@ -1232,8 +1240,12 @@ class OpenEO2MintpyApp(tk.Tk):
                         self._entries["unw_dir"].set(unw_out_dir)
                     if cor_out_dir:
                         self._entries["cor_dir"].set(cor_out_dir)
-                    
-                    messagebox.showinfo("Done", "openEO bands split successfully!\n\nPaths have been auto-populated in the Prepare tab.")
+
+                    messagebox.showinfo(
+                        "Done",
+                        "openEO bands split successfully!\n\n"
+                        "Paths have been auto-populated in the Prepare tab.",
+                    )
                 elif msg == "__split_done__:error":
                     self.status_var.set("Split failed. See log.")
                     self.split_run_btn.configure(state="normal")
@@ -1241,7 +1253,11 @@ class OpenEO2MintpyApp(tk.Tk):
                         "Split failed",
                         "The band splitting did not complete successfully. See log for details.",
                     )
-                elif msg.startswith("__progress__:") or msg == "__done__:ok" or msg == "__done__:error":
+                elif (
+                    msg.startswith("__progress__:")
+                    or msg == "__done__:ok"
+                    or msg == "__done__:error"
+                ):
                     if msg.startswith("__progress__:"):
                         _, pct, counts = msg.split(":", 2)
                         self.progress.configure(value=float(pct))

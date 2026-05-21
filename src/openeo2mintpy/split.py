@@ -6,6 +6,8 @@ and Coherence (Band 3) single-band GeoTIFFs, named to fit the YYYYMMDD_YYYYMMDD
 pattern expected by MintPy.
 """
 
+from __future__ import annotations
+
 import logging
 import re
 from pathlib import Path
@@ -81,7 +83,7 @@ def split_openeo_bands(
 
     # Search for TIFF files in input directory
     tiff_files = sorted(list(input_dir.glob("*.tif")) + list(input_dir.glob("*.tiff")))
-    
+
     # Filter files that contain a valid date pair
     jobs = []
     for f in tiff_files:
@@ -135,40 +137,40 @@ def split_openeo_bands(
             unw_band = ds.GetRasterBand(2)
             unw_data = unw_band.ReadAsArray()
             unw_out_path = unw_dir / f"{date1}_{date2}.unw.tif"
-            
+
             unw_ds = driver.Create(
                 str(unw_out_path), width, length, 1, unw_band.DataType
             )
             unw_ds.SetGeoTransform(geotransform)
             unw_ds.SetProjection(projection)
-            
+
             unw_out_band = unw_ds.GetRasterBand(1)
             unw_out_band.WriteArray(unw_data)
-            
+
             nodata_unw = unw_band.GetNoDataValue()
             if nodata_unw is not None:
                 unw_out_band.SetNoDataValue(nodata_unw)
-            
+
             unw_ds = None  # Close and save file
 
             # Extract Band 3 (Coherence)
             cor_band = ds.GetRasterBand(3)
             cor_data = cor_band.ReadAsArray()
             cor_out_path = cor_dir / f"{date1}_{date2}.cor.tif"
-            
+
             cor_ds = driver.Create(
                 str(cor_out_path), width, length, 1, cor_band.DataType
             )
             cor_ds.SetGeoTransform(geotransform)
             cor_ds.SetProjection(projection)
-            
+
             cor_out_band = cor_ds.GetRasterBand(1)
             cor_out_band.WriteArray(cor_data)
-            
+
             nodata_cor = cor_band.GetNoDataValue()
             if nodata_cor is not None:
                 cor_out_band.SetNoDataValue(nodata_cor)
-            
+
             cor_ds = None  # Close and save file
 
             ds = None  # Close input dataset
