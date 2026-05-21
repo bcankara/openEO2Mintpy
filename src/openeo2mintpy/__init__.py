@@ -15,12 +15,16 @@ from openeo2mintpy.postprocess import (
     verify_inputs_dir,
 )
 from openeo2mintpy.prepare import prepare_rsc, prepare_stack
+from openeo2mintpy.align import align_rasters, prepare_dem
 
 __all__ = [
     "__version__",
     "prepare_rsc",
     "prepare_stack",
+    "align_rasters",
+    "prepare_dem",
     "fix_processor_attribute",
     "verify_inputs_dir",
     "PostProcessError",
 ]
+

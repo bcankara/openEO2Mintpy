@@ -271,6 +271,52 @@ examples:
         help="ISCE2 baselines directory.",
     )
 
+    # --- align ---
+    align_parser = subparsers.add_parser(
+        "align",
+        help="Align split GeoTIFFs to a common bounding box.",
+        description=(
+            "Find the spatial intersection of all unwrapped phase and "
+            "coherence GeoTIFFs, and resample them all to the same grid "
+            "using GDAL."
+        ),
+    )
+    align_parser.add_argument(
+        "--unw-dir", "-u", required=True,
+        help="Directory containing unwrapped phase GeoTIFFs (*.unw.tif).",
+    )
+    align_parser.add_argument(
+        "--cor-dir", "-c", default=None,
+        help="Directory containing coherence GeoTIFFs (*.cor.tif). Default: same as --unw-dir.",
+    )
+    align_parser.add_argument(
+        "--resample", default="bilinear",
+        choices=("near", "bilinear", "cubic", "cubicspline", "lanczos"),
+        help="Resampling algorithm to use. Default: bilinear.",
+    )
+
+    # --- prepare-dem ---
+    dem_parser = subparsers.add_parser(
+        "prepare-dem",
+        help="Extract, merge, and align NASADEM tiles to match InSAR grid.",
+        description=(
+            "Find zip files or HGT/DEM files, merge them, and warp them "
+            "to match the exact extent, resolution, and CRS of aligned InSAR files."
+        ),
+    )
+    dem_parser.add_argument(
+        "--unw-dir", "-u", required=True,
+        help="Directory containing aligned unwrapped GeoTIFFs.",
+    )
+    dem_parser.add_argument(
+        "--zip-dir", "-z", required=True,
+        help="Directory containing downloaded NASADEM zip/HGT/DEM files.",
+    )
+    dem_parser.add_argument(
+        "--output-file", "-o", required=True,
+        help="Path where the final merged and aligned dem.tif will be saved.",
+    )
+
     parsed = parser.parse_args(args)
 
     log_level = logging.DEBUG if parsed.verbose else logging.INFO
@@ -284,6 +330,10 @@ examples:
         _cmd_gui()
     elif parsed.command == "split":
         _cmd_split(parsed)
+    elif parsed.command == "align":
+        _cmd_align(parsed)
+    elif parsed.command == "prepare-dem":
+        _cmd_prepare_dem(parsed)
     elif parsed.command == "prepare":
         _cmd_prepare(parsed)
     elif parsed.command == "generate-config":
@@ -450,6 +500,42 @@ def _cmd_fix_processor(args):
             "\nNext step: smallbaselineApp.py mintpy_config.txt "
             "(resume the full SBAS chain)."
         )
+
+
+def _cmd_align(args):
+    """Run non-interactive raster alignment."""
+    from openeo2mintpy.align import align_rasters
+
+    print(f"\nAligning rasters to a common grid...")
+    result = align_rasters(
+        unw_dir=args.unw_dir,
+        cor_dir=args.cor_dir,
+        resample_alg=args.resample,
+    )
+
+    print(f"\nDone: aligned {result['aligned']} GeoTIFF files.")
+    if result["errors"]:
+        print(f"Errors: {len(result['errors'])}")
+        for e in result["errors"]:
+            print(f"  ! {e['file']}: {e['error']}")
+        sys.exit(2)
+
+
+def _cmd_prepare_dem(args):
+    """Run non-interactive DEM preparation."""
+    from openeo2mintpy.align import prepare_dem
+
+    print(f"\nPreparing DEM...")
+    try:
+        output_path = prepare_dem(
+            unw_dir=args.unw_dir,
+            zip_dir=args.zip_dir,
+            output_file=args.output_file,
+        )
+        print(f"\nDone: DEM successfully prepared at {output_path}")
+    except Exception as e:
+        print(f"\nERROR: Failed to prepare DEM: {e}")
+        sys.exit(2)
 
 
 def _cmd_info(args):
