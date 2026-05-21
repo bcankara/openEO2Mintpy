@@ -98,25 +98,25 @@ def align_rasters(
             ds = gdal.Open(str(f))
             if not ds:
                 raise RuntimeError(f"Failed to open raster: {f.name}")
-            
+
             gt = ds.GetGeoTransform()
             w = ds.RasterXSize
             h = ds.RasterYSize
-            
+
             xmin = gt[0]
             xres = gt[1]
             xmax = xmin + xres * w
             ymax = gt[3]
             yres = gt[5]
             ymin = ymax + yres * h
-            
+
             xmins.append(xmin)
             xmaxs.append(xmax)
             ymins.append(ymin)
             ymaxs.append(ymax)
             xress.append(xres)
             yress.append(yres)
-            
+
             ds = None
         except Exception as e:
             err_msg = f"Error reading bounds of {f.name}: {e}"
@@ -169,7 +169,7 @@ def align_rasters(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
-        
+
         for idx, fpath in enumerate(all_files):
             try:
                 msg = f"[{idx + 1}/{len(all_files)}] Aligning {fpath.name}..."
@@ -178,17 +178,17 @@ def align_rasters(
                     log_callback(msg)
 
                 temp_out = tmp_path / fpath.name
-                
+
                 # Perform the warp to a temporary file
                 gdal.Warp(str(temp_out), str(fpath), options=warp_options)
-                
+
                 # Replace the original file with the warped one
                 if fpath.exists():
                     fpath.unlink()
-                
+
                 # Copy from temp back to original
                 os.replace(str(temp_out), str(fpath))
-                
+
                 result["aligned"] += 1
                 result["details"].append({"file": fpath.name, "status": "aligned"})
 
@@ -206,7 +206,10 @@ def align_rasters(
                     log_callback(err_msg)
                 result["errors"].append({"file": fpath.name, "error": str(e)})
 
-    msg = f"Alignment completed: {result['aligned']} files successfully aligned, {len(result['errors'])} errors."
+    msg = (
+        f"Alignment completed: {result['aligned']} files successfully aligned, "
+        f"{len(result['errors'])} errors."
+    )
     logger.info(msg)
     if log_callback:
         log_callback(msg)
@@ -296,7 +299,7 @@ def prepare_dem(
 
     # 2. Gather input tiles (HGT or DEM files)
     hgt_files = []
-    
+
     # Check for direct files in the zip directory
     hgt_files.extend(list(zip_dir.glob("*.hgt")) + list(zip_dir.glob("*.dem")))
     hgt_files.extend(list(zip_dir.glob("*.HGT")) + list(zip_dir.glob("*.DEM")))
@@ -311,10 +314,10 @@ def prepare_dem(
         logger.info(msg)
         if log_callback:
             log_callback(msg)
-            
+
         tmp_dir_obj = tempfile.TemporaryDirectory()
         tmp_dir = Path(tmp_dir_obj.name)
-        
+
         for zpath in zip_files:
             try:
                 with zipfile.ZipFile(zpath, "r") as zref:

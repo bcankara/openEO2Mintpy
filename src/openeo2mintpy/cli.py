@@ -506,7 +506,7 @@ def _cmd_align(args):
     """Run non-interactive raster alignment."""
     from openeo2mintpy.align import align_rasters
 
-    print(f"\nAligning rasters to a common grid...")
+    print("\nAligning rasters to a common grid...")
     result = align_rasters(
         unw_dir=args.unw_dir,
         cor_dir=args.cor_dir,
@@ -525,7 +525,7 @@ def _cmd_prepare_dem(args):
     """Run non-interactive DEM preparation."""
     from openeo2mintpy.align import prepare_dem
 
-    print(f"\nPreparing DEM...")
+    print("\nPreparing DEM...")
     try:
         output_path = prepare_dem(
             unw_dir=args.unw_dir,

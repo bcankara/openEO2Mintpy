@@ -9,13 +9,13 @@ and translates into MintPy-compatible inputs by generating ROI_PAC-style
 __version__ = "0.1.0"
 __author__ = "Burak Can Kara"
 
+from openeo2mintpy.align import align_rasters, prepare_dem
 from openeo2mintpy.postprocess import (
     PostProcessError,
     fix_processor_attribute,
     verify_inputs_dir,
 )
 from openeo2mintpy.prepare import prepare_rsc, prepare_stack
-from openeo2mintpy.align import align_rasters, prepare_dem
 
 __all__ = [
     "__version__",
