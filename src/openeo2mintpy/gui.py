@@ -525,7 +525,104 @@ class OpenEO2MintpyApp(tk.Tk):
         self.split_progress = ttk.Progressbar(progress_frame, mode="determinate", maximum=100)
         self.split_progress.pack(fill="x")
 
-        log_frame = ttk.LabelFrame(tab, text="  Splitter Log  ", padding=6)
+        # Optional sub-step: Prepare DEM (NASADEM tiles -> aligned dem.tif)
+        dem_frame = ttk.LabelFrame(
+            tab, text="  Prepare DEM (optional)  ", padding=10
+        )
+        dem_frame.pack(fill="x", pady=(0, 8))
+        dem_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            dem_frame,
+            text=(
+                "Extracts, merges and warps NASADEM HGT/zip tiles to match the "
+                "aligned stack grid (reference is taken from the 'Output "
+                "unwrapped directory' set above). Skip this step if you already "
+                "have a co-registered DEM."
+            ),
+            style="Hint.TLabel",
+            wraplength=720,
+            justify="left",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+
+        # Row 1: dem_zip_dir
+        ttk.Label(dem_frame, text="NASADEM tiles directory  *").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        dem_zip_var = tk.StringVar(value="")
+        self._entries["dem_zip_dir"] = dem_zip_var
+        ttk.Entry(dem_frame, textvariable=dem_zip_var).grid(
+            row=1, column=1, sticky="ew", pady=4
+        )
+
+        dem_zip_btns = ttk.Frame(dem_frame)
+        dem_zip_btns.grid(row=1, column=2, sticky="e", padx=(6, 0), pady=4)
+        dem_zip_browse = ttk.Button(
+            dem_zip_btns, text="Browse...", width=10,
+            command=lambda: self._browse_split_dir("dem_zip_dir", True),
+        )
+        dem_zip_browse.pack(side="left")
+        Tooltip(
+            dem_zip_browse,
+            "Select the directory containing NASADEM .zip / .hgt / .dem tiles.",
+        )
+
+        help_zip = ttk.Label(
+            dem_zip_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow"
+        )
+        help_zip.pack(side="left", padx=(6, 0))
+        Tooltip(
+            help_zip,
+            "Directory containing downloaded NASADEM .zip files or already "
+            "extracted .hgt / .dem tiles that cover the InSAR stack footprint.",
+        )
+
+        # Row 2: dem_output_file
+        ttk.Label(dem_frame, text="Output DEM file  *").grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        dem_out_var = tk.StringVar(value="")
+        self._entries["dem_output_file"] = dem_out_var
+        ttk.Entry(dem_frame, textvariable=dem_out_var).grid(
+            row=2, column=1, sticky="ew", pady=4
+        )
+
+        dem_out_btns = ttk.Frame(dem_frame)
+        dem_out_btns.grid(row=2, column=2, sticky="e", padx=(6, 0), pady=4)
+        dem_out_browse = ttk.Button(
+            dem_out_btns, text="Browse...", width=10,
+            command=self._browse_dem_output_file,
+        )
+        dem_out_browse.pack(side="left")
+        Tooltip(
+            dem_out_browse,
+            "Choose the output path for the merged & aligned DEM GeoTIFF "
+            "(e.g. .../process/dem/dem.tif).",
+        )
+
+        help_out = ttk.Label(
+            dem_out_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow"
+        )
+        help_out.pack(side="left", padx=(6, 0))
+        Tooltip(
+            help_out,
+            "Path where the final co-registered dem.tif will be written. A "
+            "companion ROI_PAC .rsc sidecar is generated automatically.",
+        )
+
+        # Row 3: action button
+        dem_action = ttk.Frame(dem_frame)
+        dem_action.grid(row=3, column=0, columnspan=3, sticky="e", pady=(4, 0))
+        self.dem_run_btn = ttk.Button(
+            dem_action, text="Prepare DEM", command=self._run_prepare_dem_clicked
+        )
+        self.dem_run_btn.pack(side="right")
+        Tooltip(
+            self.dem_run_btn,
+            "Merge & warp NASADEM tiles to match the aligned interferogram grid.",
+        )
+
+        log_frame = ttk.LabelFrame(tab, text="  Step 0 Log  ", padding=6)
         log_frame.pack(fill="both", expand=True)
         self.split_log = scrolledtext.ScrolledText(
             log_frame,
@@ -541,8 +638,9 @@ class OpenEO2MintpyApp(tk.Tk):
         ttk.Label(
             next_frame,
             text=(
-                "After a successful split, set 'Unwrapped directory' and 'Coherence directory' "
-                "in the next tab to these output paths."
+                "After a successful split (and optional DEM prepare), set "
+                "'Unwrapped directory' and 'Coherence directory' in the next tab "
+                "to these output paths."
             ),
             style="Hint.TLabel",
         ).pack(anchor="w")
@@ -637,6 +735,93 @@ class OpenEO2MintpyApp(tk.Tk):
         self.split_log.configure(state="normal")
         self.split_log.delete("1.0", "end")
         self.split_log.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Optional Prepare DEM sub-step
+    # ------------------------------------------------------------------
+    def _browse_dem_output_file(self) -> None:
+        """Pick an output path for the merged & aligned DEM GeoTIFF."""
+        current = self._entries["dem_output_file"].get().strip()
+        initial_dir = str(Path(current).parent) if current else str(Path.cwd())
+        initial_name = Path(current).name if current else "dem.tif"
+        path = filedialog.asksaveasfilename(
+            title="Select output DEM file",
+            defaultextension=".tif",
+            filetypes=[("GeoTIFF", "*.tif"), ("All files", "*.*")],
+            initialdir=initial_dir,
+            initialfile=initial_name,
+        )
+        if path:
+            self._entries["dem_output_file"].set(path)
+
+    def _run_prepare_dem_clicked(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        unw_out_dir = self._entries["unw_out_dir"].get().strip()
+        zip_dir = self._entries["dem_zip_dir"].get().strip()
+        output_file = self._entries["dem_output_file"].get().strip()
+
+        errors = []
+        if not unw_out_dir:
+            errors.append(
+                "'Output unwrapped directory' is required as the alignment "
+                "reference. Fill it in the Bands Splitter Inputs section above."
+            )
+        elif not Path(unw_out_dir).is_dir():
+            errors.append(
+                f"'Output unwrapped directory' does not exist: {unw_out_dir}"
+            )
+        if not zip_dir:
+            errors.append("NASADEM tiles directory is required.")
+        elif not Path(zip_dir).is_dir():
+            errors.append(f"NASADEM tiles directory does not exist: {zip_dir}")
+        if not output_file:
+            errors.append("Output DEM file path is required.")
+
+        if errors:
+            messagebox.showerror("Invalid inputs", "\n".join(f"- {e}" for e in errors))
+            return
+
+        # Disable both buttons so log routing stays coherent (existing routing
+        # uses split_run_btn state to decide whether messages belong to the
+        # Step 0 log).
+        self.dem_run_btn.configure(state="disabled")
+        self.split_run_btn.configure(state="disabled")
+        self.split_progress.configure(value=0)
+        self.status_var.set("Preparing DEM...")
+        self._split_log("")
+        self._split_log("=== Optional step: Preparing DEM ===")
+
+        self._worker = threading.Thread(
+            target=self._run_prepare_dem_worker,
+            args=(unw_out_dir, zip_dir, output_file),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_prepare_dem_worker(
+        self, unw_dir: str, zip_dir: str, output_file: str
+    ) -> None:
+        try:
+            from openeo2mintpy.align import prepare_dem
+
+            def log_cb(message: str) -> None:
+                self._log_queue.put(message)
+
+            output_path = prepare_dem(
+                unw_dir=unw_dir,
+                zip_dir=zip_dir,
+                output_file=output_file,
+                log_callback=log_cb,
+            )
+            self._log_queue.put(f"DEM written to: {output_path}")
+            self._log_queue.put("__dem_done__:ok")
+        except Exception as exc:
+            logger.exception("Prepare DEM run failed")
+            self._log_queue.put(f"ERROR: {exc}")
+            self._log_queue.put("__dem_done__:error")
 
     def _build_prepare_tab(self, notebook: ttk.Notebook) -> None:
         """Tab 1: generate .rsc sidecars + mintpy_config.txt."""
@@ -1252,6 +1437,36 @@ class OpenEO2MintpyApp(tk.Tk):
                     messagebox.showerror(
                         "Split failed",
                         "The band splitting did not complete successfully. See log for details.",
+                    )
+                elif msg == "__dem_done__:ok":
+                    self.split_progress.configure(value=100)
+                    self.status_var.set("DEM prepared.")
+                    self.dem_run_btn.configure(state="normal")
+                    self.split_run_btn.configure(state="normal")
+
+                    # Auto-populate dem_file on the Prepare tab if it is empty
+                    # so the user does not need to retype the path.
+                    dem_out = self._entries.get("dem_output_file")
+                    dem_target = self._entries.get("dem_file")
+                    if dem_out is not None and dem_target is not None:
+                        value = dem_out.get().strip()
+                        if value and not dem_target.get().strip():
+                            dem_target.set(value)
+
+                    messagebox.showinfo(
+                        "Done",
+                        "DEM prepared successfully.\n\n"
+                        "The output path has been propagated to the Prepare "
+                        "tab's DEM file field (when empty).",
+                    )
+                elif msg == "__dem_done__:error":
+                    self.status_var.set("DEM preparation failed. See log.")
+                    self.dem_run_btn.configure(state="normal")
+                    self.split_run_btn.configure(state="normal")
+                    messagebox.showerror(
+                        "DEM preparation failed",
+                        "Preparing the DEM did not complete successfully. See "
+                        "the Step 0 log for details.",
                     )
                 elif (
                     msg.startswith("__progress__:")

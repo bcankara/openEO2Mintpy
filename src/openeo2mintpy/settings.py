@@ -20,6 +20,8 @@ SETTINGS_KEYS = {
     "openeo_dir": "openEO raw TIFFs directory",
     "unw_out_dir": "Output directory for split unwrapped phase (*.unw.tif)",
     "cor_out_dir": "Output directory for split coherence (*.cor.tif)",
+    "dem_zip_dir": "Directory containing downloaded NASADEM zip/HGT/DEM tiles",
+    "dem_output_file": "Output path for the merged & aligned DEM GeoTIFF",
     "unw_dir": "Unwrapped interferograms directory (*.unw.tif)",
     "cor_dir": "Coherence files directory (*.cor.tif)",
     "conncomp_dir": "Connected component files directory",

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **GUI: optional "Prepare DEM" sub-step on the Step 0 tab.** Exposes the existing `prepare_dem()` pipeline (NASADEM zip/HGT tile merge & warp to the aligned stack grid) directly in the Tkinter interface, alongside Split & Align. The new section adds `dem_zip_dir` and `dem_output_file` inputs (persisted to `openeo2mintpy_settings.json`), a "Prepare DEM" action button, and shares the Step 0 log panel. On success the resulting DEM path is auto-propagated to the Prepare tab's `dem_file` field when that field is empty.
 - **Raster Alignment (`openeo2mintpy align`)**: Computes the spatial intersection of all unwrapped phase and coherence GeoTIFFs, and resamples them all to the same grid in-place using GDAL. Resolves varying raster dimensions from openEO InSAR tracks.
 - **DEM preparation (`openeo2mintpy prepare-dem`)**: Extracts, merges, and warps/aligns NASADEM tiles to match the exact extent, resolution, and CRS of the InSAR stack, and generates the corresponding `.rsc` sidecar file automatically.
 - **Sensing-time and heading metadata** in every `.rsc` sidecar:
