@@ -1,0 +1,1442 @@
+"""
+Tkinter-based graphical interface for openEO2Mintpy.
+
+Replaces the terminal wizard with a point-and-click form where users select
+directories and files via native file-chooser dialogs. Designed for Linux
+desktops (GNOME, KDE, XFCE) but works anywhere Tk is available.
+
+Features:
+    - Step 0 split tab to separate 3-band openEO GeoTIFFs
+    - Directory / file pickers for every path parameter
+    - Per-field "?" help icons that reveal tooltips on hover
+    - Reference date auto-detection from baseline directory
+    - Load / Save settings to openeo2mintpy_settings.json
+    - Background worker thread so the UI stays responsive
+    - Progress bar and scrollable log of generator output
+"""
+
+from __future__ import annotations
+
+import logging
+import queue
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+from openeo2mintpy.config import generate_mintpy_config
+from openeo2mintpy.metadata import auto_detect_ref_date, count_files
+from openeo2mintpy.postprocess import (
+    PostProcessError,
+    fix_processor_attribute,
+    verify_inputs_dir,
+)
+from openeo2mintpy.prepare import prepare_stack
+from openeo2mintpy.settings import (
+    SETTINGS_FILENAME,
+    find_settings_file,
+    load_settings,
+    save_settings,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# --- Field definitions ---------------------------------------------------
+#
+# Each entry describes one input row rendered in the form. ``kind`` controls
+# the picker widget ("dir" -> directory chooser, "file" -> file chooser,
+# "text" -> free text). ``required`` is only enforced at run-time validation.
+FIELDS = [
+    {
+        "key": "unw_dir",
+        "label": "Unwrapped directory",
+        "kind": "dir",
+        "required": True,
+        "help": (
+            "Directory containing the unwrapped interferograms (*.unw.tif) "
+            "produced by Dolphin/SNAPHU.\n\n"
+            "Required. File names must follow the YYYYMMDD_YYYYMMDD.unw.tif "
+            "pattern so reference/secondary dates can be parsed."
+        ),
+    },
+    {
+        "key": "cor_dir",
+        "label": "Coherence directory",
+        "kind": "dir",
+        "required": False,
+        "help": (
+            "Directory containing coherence rasters (*.cor.tif or "
+            "*.int.cor.tif).\n\n"
+            "Optional. If left blank the unwrapped directory is used."
+        ),
+    },
+    {
+        "key": "baseline_dir",
+        "label": "Baseline directory",
+        "kind": "dir",
+        "required": False,
+        "help": (
+            "ISCE2 baseline directory containing YYYYMMDD_YYYYMMDD/ "
+            "sub-folders with baseline text files.\n\n"
+            "Used to compute perpendicular baseline (Bperp). Optional: if "
+            "omitted, Bperp is set to 0 for every pair."
+        ),
+    },
+    {
+        "key": "ref_xml",
+        "label": "Reference XML",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "ISCE2 reference product XML, e.g. reference/IW1.xml or "
+            "reference/IW2.xml.\n\n"
+            "Used to extract radar metadata (wavelength, heading, "
+            "incidence angle). If omitted, default Sentinel-1 values are "
+            "used as a fallback."
+        ),
+    },
+    {
+        "key": "ref_date",
+        "label": "Reference date",
+        "kind": "text",
+        "required": False,
+        "help": (
+            "Reference (super-master) acquisition date in YYYYMMDD format, "
+            "e.g. 20240919.\n\n"
+            "Use the 'Auto-detect' button to infer it from the baseline "
+            "directory."
+        ),
+    },
+    {
+        "key": "geometry_dir",
+        "label": "Geometry directory",
+        "kind": "dir",
+        "required": False,
+        "help": (
+            "Directory containing DEM, incidence angle and azimuth angle "
+            "rasters.\n\n"
+            "Optional helper: when set, the DEM / incidence / azimuth / "
+            "lookup file fields below are auto-populated from this folder "
+            "if matching files (hgt.rdr.full, los.rdr.full, lat.rdr.full, "
+            "lon.rdr.full) exist."
+        ),
+    },
+    {
+        "key": "dem_file",
+        "label": "DEM file",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "Path to the DEM file used by MintPy — typically "
+            "hgt.rdr.full produced by ISCE2 topsStack.\n\n"
+            "Written to mintpy.load.demFile."
+        ),
+    },
+    {
+        "key": "inc_angle_file",
+        "label": "Incidence angle file",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "Path to the incidence angle raster — typically "
+            "los.rdr.full (band 1) produced by ISCE2.\n\n"
+            "Written to mintpy.load.incAngleFile."
+        ),
+    },
+    {
+        "key": "az_angle_file",
+        "label": "Azimuth angle file",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "Path to the azimuth angle raster — typically the same "
+            "los.rdr.full file used for the incidence angle.\n\n"
+            "Written to mintpy.load.azAngleFile."
+        ),
+    },
+    {
+        "key": "lookup_y_file",
+        "label": "Lookup Y (latitude) file",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "Latitude lookup table — typically ISCE2 lat.rdr.full.\n\n"
+            "Required when the stack is in radar geometry so MintPy can "
+            "geocode results. Written to mintpy.load.lookupYFile.\n"
+            "Skipping this leads to 'No lookup table found' errors."
+        ),
+    },
+    {
+        "key": "lookup_x_file",
+        "label": "Lookup X (longitude) file",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "Longitude lookup table — typically ISCE2 lon.rdr.full.\n\n"
+            "Required when the stack is in radar geometry so MintPy can "
+            "geocode results. Written to mintpy.load.lookupXFile."
+        ),
+    },
+    {
+        "key": "water_mask_file",
+        "label": "Water mask file",
+        "kind": "file",
+        "required": False,
+        "help": (
+            "Optional water mask raster.\n\n"
+            "Written to mintpy.load.waterMaskFile. Leave empty for 'auto'."
+        ),
+    },
+    {
+        "key": "mintpy_processor",
+        "label": "MintPy processor",
+        "kind": "choice",
+        "required": False,
+        "default": "isce",
+        "choices": ("isce", "hyp3"),
+        "help": (
+            "Value written to mintpy.load.processor:\n\n"
+            "  - isce: recommended when geometry files are ISCE2 "
+            "*.rdr.full outputs (hybrid ISCE2 / Dolphin pipeline).\n"
+            "  - hyp3: use when every input (ifgs + geometry) is a "
+            "geocoded HyP3-style GeoTIFF.\n\n"
+            "Note: this is independent of the PROCESSOR field inside "
+            "the .rsc sidecars, which openeo2mintpy always writes as "
+            "'hyp3' to trigger MintPy's GDAL reader for Dolphin TIFFs."
+        ),
+    },
+    {
+        "key": "work_dir",
+        "label": "MintPy output directory",
+        "kind": "dir_new",
+        "required": True,
+        "default": "./mintpy",
+        "help": (
+            "Working directory where mintpy_config.txt will be written.\n\n"
+            "Will be created if it does not exist. Default: ./mintpy"
+        ),
+    },
+    {
+        "key": "geometry_mode",
+        "label": "Geometry mode",
+        "kind": "choice",
+        "required": False,
+        "default": "auto",
+        "choices": ("auto", "radar", "geo"),
+        "help": (
+            "Controls whether .rsc files are written as radar or "
+            "geocoded metadata:\n\n"
+            "  - auto:  detect from the GeoTIFF (default).\n"
+            "  - radar: force radar geometry. Use when Dolphin GeoTIFFs "
+            "have no CRS (Origin=0,0 / Pixel=1,1). MintPy will then "
+            "produce geometryRadar.h5.\n"
+            "  - geo:   force geocoded output. MintPy will expect "
+            "geometryGeo.h5.\n\n"
+            "If you hit a 'geometryGeo.h5 not found' error after running, "
+            "switch to 'radar'."
+        ),
+    },
+]
+
+
+# Common filename patterns for auto-populating geometry file fields
+# from a selected geometry directory. Order matters: first match wins.
+GEOMETRY_AUTOFILL = {
+    "dem_file": ("hgt.rdr.full", "hgt.rdr", "*dem*.rdr.full", "*dem*.tif", "*height*.rdr.full"),
+    "inc_angle_file": ("los.rdr.full", "los.rdr", "*inc*.rdr.full", "*incidence*.tif"),
+    "az_angle_file": ("los.rdr.full", "los.rdr", "*az*.rdr.full", "*azimuth*.tif"),
+    "lookup_y_file": ("lat.rdr.full", "lat.rdr", "lat.tif"),
+    "lookup_x_file": ("lon.rdr.full", "lon.rdr", "lon.tif"),
+    "water_mask_file": ("waterMask.rdr.full", "water_mask.tif", "*water*.tif"),
+}
+
+
+# ========================================================================
+# Tooltip helper
+# ========================================================================
+class Tooltip:
+    """Lightweight tooltip that appears on hover.
+
+    A small borderless Toplevel window is shown near the mouse cursor after
+    a short delay. It is destroyed as soon as the pointer leaves the widget
+    or the widget is clicked.
+    """
+
+    BG = "#ffffe0"
+    FG = "#222222"
+    BORDER = "#999999"
+    DELAY_MS = 400
+    WRAP_PX = 340
+
+    def __init__(self, widget: tk.Widget, text: str) -> None:
+        self.widget = widget
+        self.text = text
+        self._tip: tk.Toplevel | None = None
+        self._after_id: str | None = None
+
+        widget.bind("<Enter>", self._schedule, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _schedule(self, _event=None) -> None:
+        self._cancel()
+        self._after_id = self.widget.after(self.DELAY_MS, self._show)
+
+    def _cancel(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self) -> None:
+        if self._tip is not None:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x}+{y}")
+        tip.configure(bg=self.BORDER)
+
+        label = tk.Label(
+            tip,
+            text=self.text,
+            justify="left",
+            background=self.BG,
+            foreground=self.FG,
+            relief="flat",
+            borderwidth=0,
+            wraplength=self.WRAP_PX,
+            padx=8,
+            pady=6,
+            font=("TkDefaultFont", 9),
+        )
+        label.pack(padx=1, pady=1)
+        self._tip = tip
+
+    def _hide(self, _event=None) -> None:
+        self._cancel()
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+
+# ========================================================================
+# Main application
+# ========================================================================
+class OpenEO2MintpyApp(tk.Tk):
+    """Main application window."""
+
+    PAD = 6
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title("openEO2Mintpy")
+        self.geometry("820x900")
+        self.minsize(720, 760)
+
+        self._entries: dict[str, tk.StringVar] = {}
+        self._log_queue: queue.Queue[str] = queue.Queue()
+        self._worker: threading.Thread | None = None
+
+        self._build_style()
+        self._build_widgets()
+        self._preload_settings()
+
+        self.after(120, self._drain_log_queue)
+
+    # ------------------------------------------------------------------
+    # Layout
+    # ------------------------------------------------------------------
+    def _build_style(self) -> None:
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("Help.TLabel", foreground="#1565c0", font=("TkDefaultFont", 9, "bold"))
+        style.configure("Hint.TLabel", foreground="#666666", font=("TkDefaultFont", 8))
+        style.configure("Heading.TLabel", font=("TkDefaultFont", 13, "bold"))
+        style.configure("SubHeading.TLabel", foreground="#555555")
+        style.configure(
+            "Warning.TLabel",
+            foreground="#8a6d00",
+            background="#fff8d6",
+            font=("TkDefaultFont", 9),
+        )
+        style.configure("WarningTitle.TLabel", foreground="#8a6d00",
+                        font=("TkDefaultFont", 10, "bold"))
+
+    def _build_widgets(self) -> None:
+        outer = ttk.Frame(self, padding=12)
+        outer.pack(fill="both", expand=True)
+
+        header = ttk.Frame(outer)
+        header.pack(fill="x", pady=(0, 8))
+        ttk.Label(header, text="openEO2Mintpy", style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(
+            header,
+            text=(
+                "Bridge between openEO Sentinel-1 InSAR outputs and MintPy. "
+                "Work through the tabs in order."
+            ),
+            style="SubHeading.TLabel",
+        ).pack(anchor="w")
+
+        self.notebook = ttk.Notebook(outer)
+        self.notebook.pack(fill="both", expand=True)
+
+        self._build_split_tab(self.notebook)
+        self._build_prepare_tab(self.notebook)
+        self._build_postprocess_tab(self.notebook)
+
+        self.status_var = tk.StringVar(value="Ready.")
+        ttk.Label(outer, textvariable=self.status_var, style="Hint.TLabel").pack(
+            anchor="w", pady=(4, 0)
+        )
+
+    def _build_split_tab(self, notebook: ttk.Notebook) -> None:
+        """Tab 0: split openEO 3-band GeoTIFFs."""
+        tab = ttk.Frame(notebook, padding=10)
+        notebook.add(tab, text="0. Split openEO Bands")
+
+        banner = ttk.Frame(tab)
+        banner.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            banner,
+            text="Step 0 - Split openEO 3-band GeoTIFFs",
+            style="SubHeading.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            banner,
+            text=(
+                "Extracts Band 2 (Unwrapped Phase) and Band 3 (Coherence) from openEO GeoTIFFs. "
+                "Output files are renamed to 'YYYYMMDD_YYYYMMDD.unw.tif' and 'YYYYMMDD_YYYYMMDD.cor.tif' "
+                "to match MintPy expectations."
+            ),
+            style="Hint.TLabel",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w")
+
+        form = ttk.LabelFrame(tab, text="  Bands Splitter Inputs  ", padding=10)
+        form.pack(fill="x", pady=(0, 8))
+        form.columnconfigure(1, weight=1)
+
+        # Row 0: openeo_dir
+        ttk.Label(form, text="openEO input directory  *").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        openeo_var = tk.StringVar(value="")
+        self._entries["openeo_dir"] = openeo_var
+        ttk.Entry(form, textvariable=openeo_var).grid(row=0, column=1, sticky="ew", pady=4)
+        
+        openeo_btns = ttk.Frame(form)
+        openeo_btns.grid(row=0, column=2, sticky="e", padx=(6, 0), pady=4)
+        openeo_browse = ttk.Button(
+            openeo_btns, text="Browse...", width=10,
+            command=lambda: self._browse_split_dir("openeo_dir", True)
+        )
+        openeo_browse.pack(side="left")
+        Tooltip(openeo_browse, "Select directory containing openEO 3-band GeoTIFF files.")
+        
+        help0 = ttk.Label(openeo_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow")
+        help0.pack(side="left", padx=(6, 0))
+        Tooltip(help0, "Directory where openEO TIFFs (e.g. phase_coh_*.tif) are stored.")
+
+        # Row 1: unw_out_dir
+        ttk.Label(form, text="Output unwrapped directory  *").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        unw_out_var = tk.StringVar(value="")
+        self._entries["unw_out_dir"] = unw_out_var
+        ttk.Entry(form, textvariable=unw_out_var).grid(row=1, column=1, sticky="ew", pady=4)
+        
+        unw_out_btns = ttk.Frame(form)
+        unw_out_btns.grid(row=1, column=2, sticky="e", padx=(6, 0), pady=4)
+        unw_out_browse = ttk.Button(
+            unw_out_btns, text="Browse...", width=10,
+            command=lambda: self._browse_split_dir("unw_out_dir", False)
+        )
+        unw_out_browse.pack(side="left")
+        Tooltip(unw_out_browse, "Select or create output directory for Unwrapped Phase files.")
+        
+        help1 = ttk.Label(unw_out_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow")
+        help1.pack(side="left", padx=(6, 0))
+        Tooltip(help1, "Directory where the split single-band unwrapped phase TIFFs will be saved.")
+
+        # Row 2: cor_out_dir
+        ttk.Label(form, text="Output coherence directory  *").grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        cor_out_var = tk.StringVar(value="")
+        self._entries["cor_out_dir"] = cor_out_var
+        ttk.Entry(form, textvariable=cor_out_var).grid(row=2, column=1, sticky="ew", pady=4)
+        
+        cor_out_btns = ttk.Frame(form)
+        cor_out_btns.grid(row=2, column=2, sticky="e", padx=(6, 0), pady=4)
+        cor_out_browse = ttk.Button(
+            cor_out_btns, text="Browse...", width=10,
+            command=lambda: self._browse_split_dir("cor_out_dir", False)
+        )
+        cor_out_browse.pack(side="left")
+        Tooltip(cor_out_browse, "Select or create output directory for Coherence files.")
+        
+        help2 = ttk.Label(cor_out_btns, text=" ? ", style="Help.TLabel", cursor="question_arrow")
+        help2.pack(side="left", padx=(6, 0))
+        Tooltip(help2, "Directory where the split single-band coherence TIFFs will be saved.")
+
+        action_bar = ttk.Frame(tab)
+        action_bar.pack(fill="x", pady=(0, 8))
+
+        split_load_btn = ttk.Button(
+            action_bar, text="Load settings", command=self._load_settings_clicked
+        )
+        split_load_btn.pack(side="left")
+        Tooltip(split_load_btn, f"Load previously saved settings from {SETTINGS_FILENAME}.")
+
+        split_save_btn = ttk.Button(
+            action_bar, text="Save settings", command=self._save_settings_clicked
+        )
+        split_save_btn.pack(side="left", padx=(6, 0))
+        Tooltip(split_save_btn, f"Save the current form values to {SETTINGS_FILENAME} for future runs.")
+
+        self.split_run_btn = ttk.Button(action_bar, text="Split Bands", command=self._run_split_clicked)
+        self.split_run_btn.pack(side="right")
+        Tooltip(self.split_run_btn, "Start extraction of Band 2 and Band 3 from openEO files.")
+
+        split_quit_btn = ttk.Button(action_bar, text="Quit", command=self.destroy)
+        split_quit_btn.pack(side="right", padx=(0, 6))
+
+        progress_frame = ttk.Frame(tab)
+        progress_frame.pack(fill="x", pady=(0, 6))
+        self.split_progress = ttk.Progressbar(progress_frame, mode="determinate", maximum=100)
+        self.split_progress.pack(fill="x")
+
+        log_frame = ttk.LabelFrame(tab, text="  Splitter Log  ", padding=6)
+        log_frame.pack(fill="both", expand=True)
+        self.split_log = scrolledtext.ScrolledText(
+            log_frame,
+            height=10,
+            state="disabled",
+            wrap="word",
+            font=("TkFixedFont", 9),
+        )
+        self.split_log.pack(fill="both", expand=True)
+
+        next_frame = ttk.Frame(tab)
+        next_frame.pack(fill="x", pady=(6, 0))
+        ttk.Label(
+            next_frame,
+            text="After a successful split, set 'Unwrapped directory' and 'Coherence directory' in the next tab to these output paths.",
+            style="Hint.TLabel",
+        ).pack(anchor="w")
+
+    def _browse_split_dir(self, key: str, must_exist: bool) -> None:
+        initial = self._entries[key].get().strip() or str(Path.cwd())
+        if must_exist and not Path(initial).exists():
+            initial = str(Path.cwd())
+        path = filedialog.askdirectory(
+            title=f"Select {key}", initialdir=initial, mustexist=must_exist
+        )
+        if path:
+            self._entries[key].set(path)
+
+    def _run_split_clicked(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        openeo_dir = self._entries["openeo_dir"].get().strip()
+        unw_out_dir = self._entries["unw_out_dir"].get().strip()
+        cor_out_dir = self._entries["cor_out_dir"].get().strip()
+
+        errors = []
+        if not openeo_dir:
+            errors.append("openEO input directory is required.")
+        elif not Path(openeo_dir).is_dir():
+            errors.append(f"openEO input directory does not exist: {openeo_dir}")
+        
+        if not unw_out_dir:
+            errors.append("Output unwrapped directory is required.")
+        if not cor_out_dir:
+            errors.append("Output coherence directory is required.")
+
+        if errors:
+            messagebox.showerror("Invalid inputs", "\n".join(f"- {e}" for e in errors))
+            return
+
+        self.split_run_btn.configure(state="disabled")
+        self.split_progress.configure(value=0)
+        self.status_var.set("Splitting openEO bands...")
+        self._split_log_clear()
+        self._split_log("Starting openEO band splitting...")
+
+        self._worker = threading.Thread(
+            target=self._run_split_worker,
+            args=(openeo_dir, unw_out_dir, cor_out_dir),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_split_worker(self, openeo_dir: str, unw_out_dir: str, cor_out_dir: str) -> None:
+        try:
+            from openeo2mintpy.split import split_openeo_bands
+
+            def progress_cb(current: int, total: int) -> None:
+                pct = (current / total * 100.0) if total else 0.0
+                self._log_queue.put(f"__split_progress__:{pct:.1f}:{current}/{total}")
+
+            def log_cb(message: str) -> None:
+                self._log_queue.put(message)
+
+            result = split_openeo_bands(
+                input_dir=openeo_dir,
+                unw_dir=unw_out_dir,
+                cor_dir=cor_out_dir,
+                progress_callback=progress_cb,
+                log_callback=log_cb,
+            )
+
+            self._log_queue.put(f"Processed {result['processed']} files.")
+            if result['errors']:
+                self._log_queue.put(f"Encountered {len(result['errors'])} errors:")
+                for err in result['errors'][:10]:
+                    self._log_queue.put(f"  ! {err['file']}: {err['error']}")
+                if len(result['errors']) > 10:
+                    self._log_queue.put(f"  ... and {len(result['errors']) - 10} more errors.")
+            
+            self._log_queue.put("__split_done__:ok")
+        except Exception as exc:
+            logger.exception("Split run failed")
+            self._log_queue.put(f"ERROR: {exc}")
+            self._log_queue.put("__split_done__:error")
+
+    def _split_log(self, message: str) -> None:
+        self.split_log.configure(state="normal")
+        self.split_log.insert("end", message + "\n")
+        self.split_log.see("end")
+        self.split_log.configure(state="disabled")
+
+    def _split_log_clear(self) -> None:
+        self.split_log.configure(state="normal")
+        self.split_log.delete("1.0", "end")
+        self.split_log.configure(state="disabled")
+
+    def _build_prepare_tab(self, notebook: ttk.Notebook) -> None:
+        """Tab 1: generate .rsc sidecars + mintpy_config.txt."""
+        tab = ttk.Frame(notebook, padding=10)
+        notebook.add(tab, text="1. Prepare (pre load_data)")
+
+        banner = ttk.Frame(tab)
+        banner.pack(fill="x", pady=(0, 8))
+        ttk.Label(
+            banner,
+            text="Step 1 - run BEFORE smallbaselineApp.py --dostep load_data",
+            style="SubHeading.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            banner,
+            text=(
+                "Generates ROI_PAC .rsc sidecars next to every Dolphin "
+                "GeoTIFF and writes mintpy_config.txt in the output "
+                "directory."
+            ),
+            style="Hint.TLabel",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w")
+
+        form = ttk.LabelFrame(tab, text="  Inputs  ", padding=10)
+        form.pack(fill="x", pady=(0, 8))
+        form.columnconfigure(1, weight=1)
+
+        for row, field in enumerate(FIELDS):
+            self._build_field_row(form, row, field)
+
+        action_bar = ttk.Frame(tab)
+        action_bar.pack(fill="x", pady=(0, 8))
+
+        load_btn = ttk.Button(
+            action_bar, text="Load settings", command=self._load_settings_clicked
+        )
+        load_btn.pack(side="left")
+        Tooltip(load_btn, f"Load previously saved settings from {SETTINGS_FILENAME}.")
+
+        save_btn = ttk.Button(
+            action_bar, text="Save settings", command=self._save_settings_clicked
+        )
+        save_btn.pack(side="left", padx=(6, 0))
+        Tooltip(save_btn, f"Save the current form values to {SETTINGS_FILENAME} for future runs.")
+
+        self.run_btn = ttk.Button(action_bar, text="Run", command=self._run_clicked)
+        self.run_btn.pack(side="right")
+        Tooltip(self.run_btn, "Generate .rsc sidecar files and write the MintPy configuration.")
+
+        quit_btn = ttk.Button(action_bar, text="Quit", command=self.destroy)
+        quit_btn.pack(side="right", padx=(0, 6))
+
+        progress_frame = ttk.Frame(tab)
+        progress_frame.pack(fill="x", pady=(0, 6))
+        self.progress = ttk.Progressbar(progress_frame, mode="determinate", maximum=100)
+        self.progress.pack(fill="x")
+
+        log_frame = ttk.LabelFrame(tab, text="  Log  ", padding=6)
+        log_frame.pack(fill="both", expand=True)
+        self.log = scrolledtext.ScrolledText(
+            log_frame,
+            height=10,
+            state="disabled",
+            wrap="word",
+            font=("TkFixedFont", 9),
+        )
+        self.log.pack(fill="both", expand=True)
+
+        next_frame = ttk.Frame(tab)
+        next_frame.pack(fill="x", pady=(6, 0))
+        ttk.Label(
+            next_frame,
+            text="After a successful run, proceed with MintPy:",
+            style="Hint.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            next_frame,
+            text="    smallbaselineApp.py mintpy_config.txt --dostep load_data",
+            font=("TkFixedFont", 9),
+        ).pack(anchor="w")
+        ttk.Label(
+            next_frame,
+            text="Then switch to the '2. Post-Load Fix' tab.",
+            style="Hint.TLabel",
+        ).pack(anchor="w")
+
+    def _build_postprocess_tab(self, notebook: ttk.Notebook) -> None:
+        """Tab 2: patch PROCESSOR attribute on HDF5 files after load_data."""
+        tab = ttk.Frame(notebook, padding=10)
+        notebook.add(tab, text="2. Post-Load Fix")
+
+        warn_frame = tk.Frame(tab, bg="#fff8d6", highlightbackground="#e0c674",
+                              highlightthickness=1)
+        warn_frame.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            warn_frame,
+            text="WARNING - run this step AFTER MintPy's load_data succeeds",
+            bg="#fff8d6",
+            fg="#8a6d00",
+            font=("TkDefaultFont", 10, "bold"),
+            anchor="w",
+            padx=10,
+            pady=2,
+        ).pack(fill="x", pady=(8, 0))
+        tk.Label(
+            warn_frame,
+            text=(
+                "This tab rewrites the PROCESSOR attribute inside\n"
+                "    inputs/ifgramStack.h5  and  inputs/geometryRadar.h5\n"
+                "from 'hyp3' to 'isce'. Those HDF5 files only exist AFTER you run:\n"
+                "    smallbaselineApp.py mintpy_config.txt --dostep load_data\n\n"
+                "Fixes the runtime error:\n"
+                "    AttributeError: Unknown InSAR processor: hyp3 to locate look up table!"
+            ),
+            bg="#fff8d6",
+            fg="#5a4a00",
+            justify="left",
+            anchor="w",
+            padx=10,
+            pady=2,
+            font=("TkDefaultFont", 9),
+        ).pack(fill="x", pady=(0, 8))
+
+        form = ttk.LabelFrame(tab, text="  Post-processing inputs  ", padding=10)
+        form.pack(fill="x", pady=(0, 8))
+        form.columnconfigure(1, weight=1)
+
+        self._post_entries: dict[str, tk.StringVar] = {}
+
+        # Row 0: inputs directory
+        ttk.Label(form, text="MintPy inputs directory  *").grid(
+            row=0, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        inputs_var = tk.StringVar(value="")
+        self._post_entries["inputs_dir"] = inputs_var
+        inputs_entry = ttk.Entry(form, textvariable=inputs_var)
+        inputs_entry.grid(row=0, column=1, sticky="ew", pady=4)
+
+        inputs_btns = ttk.Frame(form)
+        inputs_btns.grid(row=0, column=2, sticky="e", padx=(6, 0), pady=4)
+        inputs_browse = ttk.Button(
+            inputs_btns,
+            text="Browse...",
+            width=10,
+            command=lambda: self._browse_post_inputs_dir(),
+        )
+        inputs_browse.pack(side="left")
+        Tooltip(
+            inputs_browse,
+            "Select the MintPy inputs/ directory created by load_data, "
+            "e.g. /mnt/w/tubitak3501_merzifon/inputs",
+        )
+        help1 = ttk.Label(inputs_btns, text=" ? ", style="Help.TLabel",
+                          cursor="question_arrow")
+        help1.pack(side="left", padx=(6, 0))
+        Tooltip(
+            help1,
+            "The 'inputs/' folder inside your MintPy working directory. "
+            "It must already contain ifgramStack.h5 and geometryRadar.h5 "
+            "produced by 'smallbaselineApp.py --dostep load_data'.",
+        )
+
+        # Row 1: old processor
+        ttk.Label(form, text="Old processor (from)").grid(
+            row=1, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        old_var = tk.StringVar(value="hyp3")
+        self._post_entries["old_processor"] = old_var
+        ttk.Combobox(
+            form, textvariable=old_var, values=("hyp3", "isce"), state="readonly"
+        ).grid(row=1, column=1, sticky="ew", pady=4)
+
+        # Row 2: new processor
+        ttk.Label(form, text="New processor (to)").grid(
+            row=2, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        new_var = tk.StringVar(value="isce")
+        self._post_entries["new_processor"] = new_var
+        ttk.Combobox(
+            form, textvariable=new_var, values=("isce", "hyp3"), state="readonly"
+        ).grid(row=2, column=1, sticky="ew", pady=4)
+
+        # Row 3: target files
+        ttk.Label(form, text="Target files (comma separated)").grid(
+            row=3, column=0, sticky="w", padx=(0, 8), pady=4
+        )
+        targets_var = tk.StringVar(value="ifgramStack.h5, geometryRadar.h5")
+        self._post_entries["target_files"] = targets_var
+        ttk.Entry(form, textvariable=targets_var).grid(
+            row=3, column=1, sticky="ew", pady=4
+        )
+
+        action_bar = ttk.Frame(tab)
+        action_bar.pack(fill="x", pady=(0, 6))
+
+        verify_btn = ttk.Button(
+            action_bar, text="Verify", command=self._post_verify_clicked
+        )
+        verify_btn.pack(side="left")
+        Tooltip(
+            verify_btn,
+            "Inspect the inputs/ directory: report current PROCESSOR "
+            "values and check that /latitude + /longitude datasets exist.",
+        )
+
+        self.post_apply_btn = ttk.Button(
+            action_bar, text="Apply fix", command=self._post_apply_clicked
+        )
+        self.post_apply_btn.pack(side="left", padx=(6, 0))
+        Tooltip(
+            self.post_apply_btn,
+            "Rewrite PROCESSOR / INSAR_PROCESSOR HDF5 attributes "
+            "(hyp3 -> isce by default).",
+        )
+
+        log_frame = ttk.LabelFrame(tab, text="  Post-processing log  ", padding=6)
+        log_frame.pack(fill="both", expand=True)
+        self.post_log = scrolledtext.ScrolledText(
+            log_frame,
+            height=12,
+            state="disabled",
+            wrap="word",
+            font=("TkFixedFont", 9),
+        )
+        self.post_log.pack(fill="both", expand=True)
+
+        next_frame = ttk.Frame(tab)
+        next_frame.pack(fill="x", pady=(6, 0))
+        ttk.Label(
+            next_frame,
+            text="After a successful patch, resume the full MintPy chain:",
+            style="Hint.TLabel",
+        ).pack(anchor="w")
+        ttk.Label(
+            next_frame,
+            text="    smallbaselineApp.py mintpy_config.txt",
+            font=("TkFixedFont", 9),
+        ).pack(anchor="w")
+
+    def _build_field_row(self, parent: ttk.Frame, row: int, field: dict) -> None:
+        """Render one labelled input row with picker + help icon."""
+        key = field["key"]
+        required = field.get("required", False)
+
+        label_text = field["label"] + ("  *" if required else "")
+        lbl = ttk.Label(parent, text=label_text)
+        lbl.grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+
+        var = tk.StringVar(value=field.get("default", ""))
+        self._entries[key] = var
+
+        kind = field["kind"]
+        if kind == "choice":
+            entry = ttk.Combobox(
+                parent,
+                textvariable=var,
+                values=list(field.get("choices", ())),
+                state="readonly",
+            )
+        else:
+            entry = ttk.Entry(parent, textvariable=var)
+        entry.grid(row=row, column=1, sticky="ew", pady=4)
+
+        button_frame = ttk.Frame(parent)
+        button_frame.grid(row=row, column=2, sticky="e", padx=(6, 0), pady=4)
+
+        if kind == "dir" or kind == "dir_new":
+            browse = ttk.Button(
+                button_frame, text="Browse...", width=10,
+                command=lambda k=key, must_exist=(kind == "dir"): self._browse_dir(k, must_exist),
+            )
+            browse.pack(side="left")
+            Tooltip(browse, "Open a directory picker.")
+        elif kind == "file":
+            browse = ttk.Button(
+                button_frame, text="Browse...", width=10,
+                command=lambda k=key: self._browse_file(k),
+            )
+            browse.pack(side="left")
+            Tooltip(browse, "Open a file picker.")
+        elif kind == "text" and key == "ref_date":
+            auto = ttk.Button(
+                button_frame, text="Auto-detect", width=12,
+                command=self._auto_detect_ref_date,
+            )
+            auto.pack(side="left")
+            Tooltip(
+                auto,
+                "Try to infer the reference date from the baseline directory "
+                "by looking at which date is common to every sub-folder name.",
+            )
+
+        help_icon = ttk.Label(
+            button_frame, text=" ? ", style="Help.TLabel", cursor="question_arrow"
+        )
+        help_icon.pack(side="left", padx=(6, 0))
+        Tooltip(help_icon, field["help"])
+
+    # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
+    def _preload_settings(self) -> None:
+        """Populate form with saved settings if present."""
+        path = find_settings_file()
+        if not path:
+            return
+        data = load_settings(path)
+        if not data:
+            return
+        for key, var in self._entries.items():
+            value = data.get(key)
+            if value:
+                var.set(str(value))
+        self._log(f"Loaded settings from {path}")
+
+    def _collect(self) -> dict[str, str | None]:
+        """Read the form into a settings dict (empty strings become None)."""
+        result: dict[str, str | None] = {}
+        for key, var in self._entries.items():
+            value = var.get().strip()
+            result[key] = value if value else None
+        return result
+
+    def _load_settings_clicked(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Load settings",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile=SETTINGS_FILENAME,
+        )
+        if not path:
+            return
+        data = load_settings(path)
+        if not data:
+            messagebox.showwarning("Load settings", "Could not read settings from that file.")
+            return
+        for key, var in self._entries.items():
+            var.set(str(data.get(key) or ""))
+        self._log(f"Loaded settings from {path}")
+        self.status_var.set(f"Loaded settings: {path}")
+
+    def _save_settings_clicked(self) -> None:
+        settings = self._collect()
+        path = filedialog.asksaveasfilename(
+            title="Save settings",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile=SETTINGS_FILENAME,
+        )
+        if not path:
+            return
+        save_settings(settings, settings_path=path)
+        self._log(f"Saved settings to {path}")
+        self.status_var.set(f"Saved settings: {path}")
+
+    # ------------------------------------------------------------------
+    # Pickers / helpers
+    # ------------------------------------------------------------------
+    def _browse_dir(self, key: str, must_exist: bool) -> None:
+        initial = self._entries[key].get().strip() or str(Path.cwd())
+        if must_exist and not Path(initial).exists():
+            initial = str(Path.cwd())
+        path = filedialog.askdirectory(
+            title=f"Select {key}", initialdir=initial, mustexist=must_exist
+        )
+        if path:
+            self._entries[key].set(path)
+            if key == "geometry_dir":
+                self._autofill_geometry_files(path)
+
+    def _autofill_geometry_files(self, geometry_dir: str) -> None:
+        """Populate empty geometry / lookup file fields from a directory.
+
+        Helps the user by filling in the DEM, incidence, azimuth and
+        (critically) lookup Y / X paths when the selected geometry
+        directory contains the expected ISCE2 topsStack file names.
+        Fields that already have a value are left untouched so the user
+        stays in control.
+        """
+        geom_dir = Path(geometry_dir)
+        if not geom_dir.is_dir():
+            return
+
+        filled: list[str] = []
+        for field_key, patterns in GEOMETRY_AUTOFILL.items():
+            if self._entries.get(field_key) is None:
+                continue
+            if self._entries[field_key].get().strip():
+                continue
+            resolved = self._first_match(geom_dir, patterns)
+            if resolved is not None:
+                self._entries[field_key].set(str(resolved))
+                filled.append(f"{field_key} -> {resolved.name}")
+
+        if filled:
+            self._log("Auto-filled from geometry directory:")
+            for line in filled:
+                self._log(f"  - {line}")
+
+    @staticmethod
+    def _first_match(directory: Path, patterns: tuple[str, ...]) -> Path | None:
+        """Return the first path inside *directory* matching any pattern."""
+        for pattern in patterns:
+            exact = directory / pattern
+            if exact.is_file():
+                return exact
+            matches = sorted(directory.glob(pattern))
+            if matches:
+                return matches[0]
+        return None
+
+    def _browse_file(self, key: str) -> None:
+        initial = self._entries[key].get().strip() or str(Path.cwd())
+        start_dir = initial if Path(initial).is_dir() else str(Path(initial).parent or Path.cwd())
+        path = filedialog.askopenfilename(title=f"Select {key}", initialdir=start_dir)
+        if path:
+            self._entries[key].set(path)
+
+    def _auto_detect_ref_date(self) -> None:
+        baseline = self._entries["baseline_dir"].get().strip()
+        if not baseline:
+            messagebox.showinfo(
+                "Auto-detect reference date",
+                "Please select a baseline directory first.",
+            )
+            return
+        detected = auto_detect_ref_date(baseline)
+        if detected:
+            self._entries["ref_date"].set(detected)
+            self._log(f"Auto-detected reference date: {detected}")
+            self.status_var.set(f"Auto-detected reference date: {detected}")
+        else:
+            messagebox.showwarning(
+                "Auto-detect reference date",
+                "Could not determine a reference date from the baseline directory.",
+            )
+
+    # ------------------------------------------------------------------
+    # Validation + execution
+    # ------------------------------------------------------------------
+    def _validate(self, settings: dict) -> list[str]:
+        errors: list[str] = []
+
+        unw = settings.get("unw_dir")
+        if not unw:
+            errors.append("Unwrapped directory is required.")
+        elif not Path(unw).is_dir():
+            errors.append(f"Unwrapped directory does not exist: {unw}")
+
+        for key in ("cor_dir", "baseline_dir", "geometry_dir"):
+            value = settings.get(key)
+            if value and not Path(value).is_dir():
+                errors.append(f"{key} does not exist: {value}")
+
+        ref_xml = settings.get("ref_xml")
+        if ref_xml and not Path(ref_xml).is_file():
+            errors.append(f"Reference XML file does not exist: {ref_xml}")
+
+        for file_key in (
+            "dem_file",
+            "inc_angle_file",
+            "az_angle_file",
+            "lookup_y_file",
+            "lookup_x_file",
+            "water_mask_file",
+        ):
+            value = settings.get(file_key)
+            if value and not Path(value).is_file():
+                errors.append(f"{file_key} does not exist: {value}")
+
+        processor = settings.get("mintpy_processor")
+        if processor and processor not in ("isce", "hyp3"):
+            errors.append(
+                f"MintPy processor must be 'isce' or 'hyp3' (got {processor!r})."
+            )
+
+        ref_date = settings.get("ref_date")
+        if ref_date and (len(ref_date) != 8 or not ref_date.isdigit()):
+            errors.append("Reference date must be in YYYYMMDD format.")
+
+        if not settings.get("work_dir"):
+            errors.append("MintPy output directory is required.")
+
+        mode = settings.get("geometry_mode")
+        if mode and mode not in ("auto", "radar", "geo"):
+            errors.append(f"Geometry mode must be auto, radar or geo (got {mode!r}).")
+
+        return errors
+
+    def _run_clicked(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "A run is already in progress.")
+            return
+
+        settings = self._collect()
+        errors = self._validate(settings)
+        if errors:
+            messagebox.showerror("Invalid inputs", "\n".join(f"- {e}" for e in errors))
+            return
+
+        unw_count = count_files(settings["unw_dir"], "*.unw.tif")
+        if unw_count == 0:
+            if not messagebox.askyesno(
+                "No unwrapped files",
+                "No *.unw.tif files were found in the selected directory. "
+                "Run anyway?",
+            ):
+                return
+
+        self._log(f"Found {unw_count} unwrapped files in {settings['unw_dir']}")
+        self.run_btn.configure(state="disabled")
+        self.progress.configure(value=0)
+        self.status_var.set("Running...")
+
+        self._worker = threading.Thread(
+            target=self._run_worker,
+            args=(settings,),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_worker(self, settings: dict) -> None:
+        """Background worker: runs prepare_stack + generate_mintpy_config."""
+        try:
+            def progress_cb(current: int, total: int) -> None:
+                pct = (current / total * 100.0) if total else 0.0
+                self._log_queue.put(f"__progress__:{pct:.1f}:{current}/{total}")
+
+            self._log_queue.put("Generating .rsc sidecar files...")
+
+            result = prepare_stack(
+                unw_dir=settings["unw_dir"],
+                cor_dir=settings.get("cor_dir"),
+                conncomp_dir=settings["unw_dir"],
+                geometry_dir=settings.get("geometry_dir"),
+                baseline_dir=settings.get("baseline_dir"),
+                ref_xml=settings.get("ref_xml"),
+                ref_date=settings.get("ref_date"),
+                progress_callback=progress_cb,
+                geometry_mode=settings.get("geometry_mode") or "auto",
+            )
+
+            self._log_queue.put(
+                f"Wrote {result['rsc_written']} .rsc files "
+                f"({len(result.get('errors', []))} errors)."
+            )
+            for err in result.get("errors", [])[:5]:
+                self._log_queue.put(f"  ! {err.get('file')}: {err.get('error')}")
+            if len(result.get("errors", [])) > 5:
+                self._log_queue.put(f"  ... and {len(result['errors']) - 5} more errors")
+
+            self._log_queue.put("Generating MintPy configuration...")
+            work_dir = settings.get("work_dir") or "./mintpy"
+            config_path = generate_mintpy_config(
+                work_dir=work_dir,
+                unw_dir=settings["unw_dir"],
+                cor_dir=settings.get("cor_dir"),
+                conncomp_dir=settings["unw_dir"],
+                dem_file=settings.get("dem_file"),
+                inc_angle_file=settings.get("inc_angle_file"),
+                az_angle_file=settings.get("az_angle_file"),
+                lookup_y_file=settings.get("lookup_y_file"),
+                lookup_x_file=settings.get("lookup_x_file"),
+                water_mask_file=settings.get("water_mask_file"),
+                processor=settings.get("mintpy_processor") or "isce",
+            )
+            self._log_queue.put(f"MintPy config written: {config_path}")
+            for key in ("lookup_y_file", "lookup_x_file"):
+                if not settings.get(key):
+                    self._log_queue.put(
+                        f"  WARNING: {key} not set -- MintPy may fail with "
+                        "'No lookup table found' during geocoding."
+                    )
+            self._log_queue.put("__done__:ok")
+        except Exception as exc:
+            logger.exception("GUI run failed")
+            self._log_queue.put(f"ERROR: {exc}")
+            self._log_queue.put("__done__:error")
+
+    # ------------------------------------------------------------------
+    # Log pump (called on the Tk main loop)
+    # ------------------------------------------------------------------
+    def _drain_log_queue(self) -> None:
+        try:
+            while True:
+                msg = self._log_queue.get_nowait()
+                if msg.startswith("__split_progress__:"):
+                    _, pct, counts = msg.split(":", 2)
+                    self.split_progress.configure(value=float(pct))
+                    self.status_var.set(f"Splitting... {counts} ({float(pct):.1f}%)")
+                elif msg == "__split_done__:ok":
+                    self.split_progress.configure(value=100)
+                    self.status_var.set("Split done.")
+                    self.split_run_btn.configure(state="normal")
+                    
+                    # Auto-populate the next tab's fields:
+                    unw_out_dir = self._entries.get("unw_out_dir", "").get().strip()
+                    cor_out_dir = self._entries.get("cor_out_dir", "").get().strip()
+                    if unw_out_dir:
+                        self._entries["unw_dir"].set(unw_out_dir)
+                    if cor_out_dir:
+                        self._entries["cor_dir"].set(cor_out_dir)
+                    
+                    messagebox.showinfo("Done", "openEO bands split successfully!\n\nPaths have been auto-populated in the Prepare tab.")
+                elif msg == "__split_done__:error":
+                    self.status_var.set("Split failed. See log.")
+                    self.split_run_btn.configure(state="normal")
+                    messagebox.showerror(
+                        "Split failed",
+                        "The band splitting did not complete successfully. See log for details.",
+                    )
+                elif msg.startswith("__progress__:") or msg == "__done__:ok" or msg == "__done__:error":
+                    if msg.startswith("__progress__:"):
+                        _, pct, counts = msg.split(":", 2)
+                        self.progress.configure(value=float(pct))
+                        self.status_var.set(f"Running... {counts} ({float(pct):.1f}%)")
+                    elif msg == "__done__:ok":
+                        self.progress.configure(value=100)
+                        self.status_var.set("Done.")
+                        self.run_btn.configure(state="normal")
+                        messagebox.showinfo("Done", "All outputs generated successfully.")
+                    elif msg == "__done__:error":
+                        self.status_var.set("Failed. See log for details.")
+                        self.run_btn.configure(state="normal")
+                        messagebox.showerror(
+                            "Run failed",
+                            "The run did not complete successfully. See the log for details.",
+                        )
+                else:
+                    # Route standard logging message to appropriate window:
+                    # If split_run_btn is disabled, it is a split message.
+                    if str(self.split_run_btn.cget("state")) == "disabled":
+                        self._split_log(msg)
+                    else:
+                        self._log(msg)
+        except queue.Empty:
+            pass
+        finally:
+            self.after(120, self._drain_log_queue)
+
+    def _log(self, message: str) -> None:
+        self.log.configure(state="normal")
+        self.log.insert("end", message + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Post-load fix tab
+    # ------------------------------------------------------------------
+    def _browse_post_inputs_dir(self) -> None:
+        initial = self._post_entries["inputs_dir"].get().strip() or str(Path.cwd())
+        if not Path(initial).is_dir():
+            initial = str(Path.cwd())
+        path = filedialog.askdirectory(
+            title="Select MintPy inputs/ directory",
+            initialdir=initial,
+            mustexist=True,
+        )
+        if path:
+            self._post_entries["inputs_dir"].set(path)
+
+    def _post_collect(self) -> dict:
+        raw_targets = self._post_entries["target_files"].get().strip()
+        targets = tuple(
+            t.strip() for t in raw_targets.split(",") if t.strip()
+        ) or ("ifgramStack.h5", "geometryRadar.h5")
+        return {
+            "inputs_dir": self._post_entries["inputs_dir"].get().strip(),
+            "old_processor": self._post_entries["old_processor"].get().strip() or "hyp3",
+            "new_processor": self._post_entries["new_processor"].get().strip() or "isce",
+            "target_files": targets,
+        }
+
+    def _post_log(self, message: str) -> None:
+        self.post_log.configure(state="normal")
+        self.post_log.insert("end", message + "\n")
+        self.post_log.see("end")
+        self.post_log.configure(state="disabled")
+
+    def _post_verify_clicked(self) -> None:
+        params = self._post_collect()
+        if not params["inputs_dir"]:
+            messagebox.showerror(
+                "Verify",
+                "Please select the MintPy inputs/ directory first.",
+            )
+            return
+        if not Path(params["inputs_dir"]).is_dir():
+            messagebox.showerror(
+                "Verify",
+                f"Directory does not exist: {params['inputs_dir']}",
+            )
+            return
+
+        self._post_log(f"--- Verifying {params['inputs_dir']} ---")
+        try:
+            report = verify_inputs_dir(
+                params["inputs_dir"],
+                target_files=params["target_files"],
+                expected_old=params["old_processor"],
+            )
+        except PostProcessError as exc:
+            self._post_log(f"ERROR: {exc}")
+            messagebox.showerror("Verify", str(exc))
+            return
+
+        any_missing_lookup = False
+        for entry in report:
+            tag = "OK" if entry["exists"] else "MISSING"
+            self._post_log(f"[{tag}] {entry['path'].name}")
+            if entry["exists"]:
+                self._post_log(f"      PROCESSOR        : {entry['processor']}")
+                self._post_log(f"      INSAR_PROCESSOR  : {entry['insar_processor']}")
+                if entry["has_lat_lon"] is not None:
+                    self._post_log(f"      has /lat /lon    : {entry['has_lat_lon']}")
+                    if entry["has_lat_lon"] is False:
+                        any_missing_lookup = True
+                self._post_log(f"      needs patch      : {entry['needs_patch']}")
+            for issue in entry["issues"]:
+                self._post_log(f"      ! {issue}")
+        self._post_log("")
+        self.status_var.set(
+            "Verify complete."
+            + (" Missing lookup datasets - see log." if any_missing_lookup else "")
+        )
+
+    def _post_apply_clicked(self) -> None:
+        params = self._post_collect()
+        if not params["inputs_dir"]:
+            messagebox.showerror(
+                "Apply fix",
+                "Please select the MintPy inputs/ directory first.",
+            )
+            return
+        if not Path(params["inputs_dir"]).is_dir():
+            messagebox.showerror(
+                "Apply fix",
+                f"Directory does not exist: {params['inputs_dir']}",
+            )
+            return
+        if not messagebox.askyesno(
+            "Apply fix",
+            f"Rewrite PROCESSOR attribute in:\n"
+            f"  {', '.join(params['target_files'])}\n\n"
+            f"{params['old_processor']!r} -> {params['new_processor']!r}\n\n"
+            "Are you sure 'smallbaselineApp.py --dostep load_data' "
+            "has already completed successfully?",
+        ):
+            return
+
+        self._post_log(
+            f"--- Applying fix: {params['old_processor']} -> "
+            f"{params['new_processor']} ---"
+        )
+        self.post_apply_btn.configure(state="disabled")
+        try:
+            summary = fix_processor_attribute(
+                inputs_dir=params["inputs_dir"],
+                old=params["old_processor"],
+                new=params["new_processor"],
+                target_files=params["target_files"],
+                dry_run=False,
+                require_lookup_datasets=True,
+            )
+        except PostProcessError as exc:
+            self._post_log(f"ERROR: {exc}")
+            messagebox.showerror("Apply fix", str(exc))
+            return
+        finally:
+            self.post_apply_btn.configure(state="normal")
+
+        for record in summary["details"]:
+            self._post_log(f"  - {record['message']}")
+        self._post_log(
+            f"Done: patched={summary['patched']}, "
+            f"skipped={summary['skipped']}, errors={len(summary['errors'])}."
+        )
+        self.status_var.set(
+            f"Post-load fix: patched={summary['patched']}, "
+            f"skipped={summary['skipped']}."
+        )
+
+        if summary["patched"] > 0:
+            messagebox.showinfo(
+                "Apply fix",
+                f"Patched {summary['patched']} file(s).\n\n"
+                "Next step:\n"
+                "    smallbaselineApp.py mintpy_config.txt",
+            )
+
+
+# ========================================================================
+# Entry point
+# ========================================================================
+def run_gui() -> None:
+    """Launch the openEO2Mintpy Tkinter GUI."""
+    try:
+        app = OpenEO2MintpyApp()
+    except tk.TclError as exc:
+        raise SystemExit(
+            "Could not initialize the GUI. Is a display available and is "
+            "python3-tk installed?\n"
+            f"Original error: {exc}"
+        ) from exc
+    app.mainloop()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    run_gui()
