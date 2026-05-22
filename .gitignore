@@ -41,3 +41,7 @@ dolphin2mintpy_settings.json
 
 # Temporary commit message files
 .commit_msg.tmp
+
+# Manuscript
+manuscript/
+
