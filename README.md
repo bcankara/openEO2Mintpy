@@ -90,6 +90,7 @@ after MintPy has created its HDF5 inputs.
   input globs and geometry paths.
 - **Post-load processor patch**: verifies and rewrites HDF5 processor attributes
   after MintPy `load_data` when a hybrid openEO/ISCE/MintPy workflow needs it.
+  Supports both `geometryRadar.h5` and `geometryGeo.h5` auto-detection.
 - **GUI and CLI parity**: supports repeatable command-line runs and an
   interactive Tkinter desktop interface.
 
@@ -209,7 +210,8 @@ smallbaselineApp.py mintpy_config.txt --dostep load_data
 ### 7. Apply post-load fix
 
 Run this after MintPy has created `mintpy/inputs/ifgramStack.h5` and the
-geometry HDF5 file:
+geometry HDF5 file. The utility dynamically detects whether your stack is in
+radar geometry (`geometryRadar.h5`) or geocoded geometry (`geometryGeo.h5`):
 
 ```bash
 openeo2mintpy fix-processor --inputs-dir ./mintpy/inputs
@@ -219,6 +221,12 @@ Inspect first without modifying files:
 
 ```bash
 openeo2mintpy fix-processor --inputs-dir ./mintpy/inputs --verify-only
+```
+
+You can also pass custom targets explicitly (e.g. for geocoded files):
+
+```bash
+openeo2mintpy fix-processor --inputs-dir ./mintpy/inputs --targets ifgramStack.h5 geometryGeo.h5
 ```
 
 Then continue the MintPy workflow:
