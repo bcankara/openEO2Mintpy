@@ -178,10 +178,10 @@ def extract_unique_bursts(
     """Extract unique (Track, Direction, Swath, BurstId) combinations.
 
     Returns a list of dicts, each with keys:
-    ``track``, ``direction``, ``swath``, ``burst_id``, ``count``.
+    ``track``, ``direction``, ``swath``, ``burst_id``, ``count``, ``geofootprint``.
     Sorted by track, then burst_id.
     """
-    combos: dict[tuple, int] = {}
+    combos: dict[tuple, dict[str, Any]] = {}
     for b in bursts:
         platform = b.get("PlatformSerialIdentifier", "UNKNOWN")
         if platform not in ["A", "C"]:
@@ -192,17 +192,20 @@ def extract_unique_bursts(
             b.get("SwathIdentifier", "UNKNOWN"),
             b.get("BurstId"),
         )
-        combos[key] = combos.get(key, 0) + 1
+        if key not in combos:
+            combos[key] = {
+                "track": key[0],
+                "direction": key[1],
+                "swath": key[2],
+                "burst_id": key[3],
+                "count": 0,
+                "geofootprint": b.get("GeoFootprint"),
+            }
+        combos[key]["count"] += 1
 
     results = []
-    for (track, direction, swath, burst_id), count in sorted(combos.items()):
-        results.append({
-            "track": track,
-            "direction": direction,
-            "swath": swath,
-            "burst_id": burst_id,
-            "count": count,
-        })
+    for key in sorted(combos.keys()):
+        results.append(combos[key])
     return results
 
 

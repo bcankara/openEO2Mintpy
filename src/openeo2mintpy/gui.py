@@ -317,6 +317,9 @@ class OpenEO2MintpyApp(tk.Tk):
         self._auth_is_success = False
         self.next_click_corner = "NW"
         self.map_polygon = None
+        self.map_burst_polygons = []
+        self.map_burst_markers = []
+        self._bbox_entries = {}
         self.query_groups = None
 
         self._build_style()
@@ -417,6 +420,9 @@ class OpenEO2MintpyApp(tk.Tk):
         for key, default in openeo_defaults.items():
             if key not in self._entries:
                 self._entries[key] = tk.StringVar(value=default)
+
+        if "openeo_roi_locked" not in self._entries:
+            self._entries["openeo_roi_locked"] = tk.BooleanVar(value=False)
 
         # Setup bbox write trace
         for key in (
@@ -523,30 +529,42 @@ class OpenEO2MintpyApp(tk.Tk):
         ttk.Label(bbox_frame, text="North Lat").grid(
             row=0, column=0, sticky="w", pady=1, padx=2
         )
-        ttk.Entry(
+        self._bbox_entries["north"] = ttk.Entry(
             bbox_frame, textvariable=self._entries["openeo_bbox_north"], width=9
-        ).grid(row=0, column=1, sticky="ew", pady=1, padx=2)
+        )
+        self._bbox_entries["north"].grid(row=0, column=1, sticky="ew", pady=1, padx=2)
 
         ttk.Label(bbox_frame, text="South Lat").grid(
             row=0, column=2, sticky="w", pady=1, padx=2
         )
-        ttk.Entry(
+        self._bbox_entries["south"] = ttk.Entry(
             bbox_frame, textvariable=self._entries["openeo_bbox_south"], width=9
-        ).grid(row=0, column=3, sticky="ew", pady=1, padx=2)
+        )
+        self._bbox_entries["south"].grid(row=0, column=3, sticky="ew", pady=1, padx=2)
 
         ttk.Label(bbox_frame, text="East Lon").grid(
             row=1, column=0, sticky="w", pady=1, padx=2
         )
-        ttk.Entry(
+        self._bbox_entries["east"] = ttk.Entry(
             bbox_frame, textvariable=self._entries["openeo_bbox_east"], width=9
-        ).grid(row=1, column=1, sticky="ew", pady=1, padx=2)
+        )
+        self._bbox_entries["east"].grid(row=1, column=1, sticky="ew", pady=1, padx=2)
 
         ttk.Label(bbox_frame, text="West Lon").grid(
             row=1, column=2, sticky="w", pady=1, padx=2
         )
-        ttk.Entry(
+        self._bbox_entries["west"] = ttk.Entry(
             bbox_frame, textvariable=self._entries["openeo_bbox_west"], width=9
-        ).grid(row=1, column=3, sticky="ew", pady=1, padx=2)
+        )
+        self._bbox_entries["west"].grid(row=1, column=3, sticky="ew", pady=1, padx=2)
+
+        self.openeo_roi_lock_cb = ttk.Checkbutton(
+            bbox_frame,
+            text="🔒 Lock ROI Coordinates",
+            variable=self._entries["openeo_roi_locked"],
+            command=self._on_roi_lock_toggle,
+        )
+        self.openeo_roi_lock_cb.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 1), padx=2)
 
         self.openeo_find_bursts_btn = ttk.Button(
             query_frame,
@@ -732,6 +750,9 @@ class OpenEO2MintpyApp(tk.Tk):
             logger.debug("Failed to set map polygon: %s", exc)
 
     def _map_click_cb(self, coords: tuple[float, float]) -> None:
+        if self._entries.get("openeo_roi_locked") and self._entries["openeo_roi_locked"].get():
+            self._openeo_log("ROI is locked. Unlock it to change coordinates.")
+            return
         lat, lon = coords
         if self.next_click_corner == "NW":
             self._entries["openeo_bbox_north"].set(f"{lat:.5f}")
@@ -749,6 +770,9 @@ class OpenEO2MintpyApp(tk.Tk):
             self._normalize_bbox()
 
     def _set_nw_corner(self, coords: tuple[float, float]) -> None:
+        if self._entries.get("openeo_roi_locked") and self._entries["openeo_roi_locked"].get():
+            self._openeo_log("ROI is locked. Unlock it to change coordinates.")
+            return
         lat, lon = coords
         self._entries["openeo_bbox_north"].set(f"{lat:.5f}")
         self._entries["openeo_bbox_west"].set(f"{lon:.5f}")
@@ -757,6 +781,9 @@ class OpenEO2MintpyApp(tk.Tk):
         self.status_var.set("Northwest corner set.")
 
     def _set_se_corner(self, coords: tuple[float, float]) -> None:
+        if self._entries.get("openeo_roi_locked") and self._entries["openeo_roi_locked"].get():
+            self._openeo_log("ROI is locked. Unlock it to change coordinates.")
+            return
         lat, lon = coords
         self._entries["openeo_bbox_south"].set(f"{lat:.5f}")
         self._entries["openeo_bbox_east"].set(f"{lon:.5f}")
@@ -2769,6 +2796,88 @@ class OpenEO2MintpyApp(tk.Tk):
             except Exception as e:
                 logger.error("Failed to update auth popup to success state: %s", e)
 
+    def _on_roi_lock_toggle(self) -> None:
+        """Enable or disable editing of BBox entries based on lock checkbox status."""
+        locked = self._entries.get("openeo_roi_locked") and self._entries["openeo_roi_locked"].get()
+        new_state = "readonly" if locked else "normal"
+        for key, entry in self._bbox_entries.items():
+            entry.configure(state=new_state)
+
+    def _clear_burst_displays(self) -> None:
+        """Clear all drawn burst footprints and markers from the map."""
+        if not hasattr(self, "map_widget") or self.map_widget is None or not HAS_MAP:
+            return
+
+        for poly in self.map_burst_polygons:
+            try:
+                self.map_widget.delete(poly)
+            except Exception:
+                pass
+        self.map_burst_polygons.clear()
+
+        for marker in self.map_burst_markers:
+            try:
+                self.map_widget.delete(marker)
+            except Exception:
+                pass
+        self.map_burst_markers.clear()
+
+    def _draw_burst_displays(self, selected_index: int | None = None) -> None:
+        """Draw all found bursts on the map, highlighting the one at selected_index."""
+        if not hasattr(self, "map_widget") or self.map_widget is None or not HAS_MAP:
+            return
+
+        self._clear_burst_displays()
+
+        bursts = getattr(self, "found_bursts", [])
+        if not bursts:
+            return
+
+        for idx, b in enumerate(bursts):
+            polygon_coords = []
+            if b.get("geofootprint") and b["geofootprint"].get("type") == "Polygon":
+                coords = b["geofootprint"].get("coordinates", [])
+                if coords:
+                    for lon, lat in coords[0]:
+                        polygon_coords.append((lat, lon))
+
+            if not polygon_coords:
+                continue
+
+            if selected_index is not None and idx == selected_index:
+                outline_color = "#ff6f00"  # Vibrant orange
+                border_width = 4
+            else:
+                outline_color = "#1565c0"  # Normal blue
+                border_width = 2
+
+            try:
+                poly = self.map_widget.set_polygon(
+                    polygon_coords,
+                    outline_color=outline_color,
+                    fill_color=None,
+                    border_width=border_width,
+                )
+                self.map_burst_polygons.append(poly)
+            except Exception as exc:
+                logger.debug("Failed to set burst polygon on map: %s", exc)
+
+            lats = [c[0] for c in polygon_coords]
+            lons = [c[1] for c in polygon_coords]
+            center_lat = sum(lats) / len(lats)
+            center_lon = sum(lons) / len(lons)
+
+            label_text = f"T{b['track']}-B{b['burst_id']}"
+            try:
+                marker = self.map_widget.set_marker(
+                    center_lat,
+                    center_lon,
+                    text=label_text,
+                )
+                self.map_burst_markers.append(marker)
+            except Exception as exc:
+                logger.debug("Failed to set burst marker on map: %s", exc)
+
     def _show_burst_selection_dialog(self) -> None:
         """Display a modal dialog with a Table of unique Sentinel-1 bursts in the ROI."""
         popup = tk.Toplevel(self)
@@ -2876,6 +2985,33 @@ class OpenEO2MintpyApp(tk.Tk):
             on_select()
 
         tree.bind("<Double-1>", on_double_click)
+
+        # Treeview selection changes handler
+        def on_tree_select(event):
+            selected = tree.selection()
+            if not selected:
+                return
+            item_id = selected[0]
+            selected_idx = tree.index(item_id)
+            self._draw_burst_displays(selected_idx)
+
+        tree.bind("<<TreeviewSelect>>", on_tree_select)
+
+        # Cleanup overlays on destroy
+        def on_destroy(event):
+            if event.widget == popup:
+                self._clear_burst_displays()
+
+        popup.bind("<Destroy>", on_destroy)
+
+        # Draw all candidate bursts initially
+        self._draw_burst_displays()
+
+        # Auto-select the first item
+        children = tree.get_children()
+        if children:
+            tree.selection_set(children[0])
+            tree.focus(children[0])
 
         # Bottom Button Frame
         btn_frame = ttk.Frame(main_frame)
