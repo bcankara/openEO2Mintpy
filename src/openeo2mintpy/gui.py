@@ -279,6 +279,21 @@ class Tooltip:
 # ========================================================================
 # Main application
 # ========================================================================
+class QueueHandler(logging.Handler):
+    """Custom logging handler to route logs to a Queue."""
+
+    def __init__(self, log_queue: queue.Queue[str]) -> None:
+        super().__init__()
+        self.log_queue = log_queue
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            self.log_queue.put(msg)
+        except Exception:
+            self.handleError(record)
+
+
 class OpenEO2MintpyApp(tk.Tk):
     """Main application window."""
 
@@ -303,6 +318,16 @@ class OpenEO2MintpyApp(tk.Tk):
         self._build_style()
         self._build_widgets()
         self._preload_settings()
+
+        # Route openEO and application logs to GUI
+        self.queue_handler = QueueHandler(self._log_queue)
+        self.queue_handler.setFormatter(logging.Formatter("%(message)s"))
+
+        logging.getLogger("openeo").setLevel(logging.INFO)
+        logging.getLogger("openeo").addHandler(self.queue_handler)
+
+        logging.getLogger("openeo2mintpy").setLevel(logging.INFO)
+        logging.getLogger("openeo2mintpy").addHandler(self.queue_handler)
 
         self.after(120, self._drain_log_queue)
 

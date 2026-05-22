@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import platform
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -28,12 +30,56 @@ DEFAULT_CWL_URL = (
 )
 
 
+def is_headless_or_wsl() -> bool:
+    """Detect if running in a WSL or headless Linux environment."""
+    # WSL checks
+    if "WSL_DISTRO_NAME" in os.environ or "WSL_INTEROP" in os.environ:
+        return True
+
+    # Alternative WSL check (by kernel version string)
+    if platform.system() == "Linux":
+        try:
+            with open("/proc/version") as f:
+                if "microsoft" in f.read().lower():
+                    return True
+        except Exception:
+            pass
+
+    # Headless Linux check (no display manager)
+    if (
+        platform.system() == "Linux"
+        and not os.environ.get("DISPLAY")
+        and not os.environ.get("WAYLAND_DISPLAY")
+    ):
+        return True
+
+    return False
+
+
 def connect_and_auth(url: str = DEFAULT_BACKEND) -> openeo.Connection:
-    """Connect to openEO backend and authenticate via OIDC."""
+    """Connect to openEO backend and authenticate via OIDC.
+
+    Falls back to Device Code flow in headless or WSL environments.
+    """
     logger.info("Connecting to openEO backend at %s", url)
     connection = openeo.connect(url)
-    logger.info("Authenticating via OIDC...")
-    connection.authenticate_oidc()
+
+    use_device_flow = is_headless_or_wsl()
+
+    if use_device_flow:
+        logger.info("Headless/WSL environment detected. Initiating OIDC Device Code flow...")
+        connection.authenticate_oidc_device(store_refresh_token=True)
+    else:
+        logger.info("Authenticating via OIDC...")
+        try:
+            connection.authenticate_oidc(store_refresh_token=True)
+        except Exception as e:
+            logger.warning(
+                "OIDC authentication failed or blocked: %s. Falling back to Device Code flow...",
+                e,
+            )
+            connection.authenticate_oidc_device(store_refresh_token=True)
+
     logger.info("Authentication successful.")
     return connection
 

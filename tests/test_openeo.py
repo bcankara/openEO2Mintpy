@@ -9,15 +9,44 @@ import pytest
 from openeo2mintpy import openeo_client
 
 
-def test_connect_and_auth():
-    with patch("openeo.connect") as mock_connect:
+def test_connect_and_auth_standard():
+    with patch("openeo.connect") as mock_connect, \
+         patch("openeo2mintpy.openeo_client.is_headless_or_wsl", return_value=False):
         mock_conn = MagicMock()
         mock_connect.return_value = mock_conn
 
         conn = openeo_client.connect_and_auth("https://fake.openeo.backend")
 
         mock_connect.assert_called_once_with("https://fake.openeo.backend")
-        mock_conn.authenticate_oidc.assert_called_once()
+        mock_conn.authenticate_oidc.assert_called_once_with(store_refresh_token=True)
+        assert conn == mock_conn
+
+
+def test_connect_and_auth_headless_wsl():
+    with patch("openeo.connect") as mock_connect, \
+         patch("openeo2mintpy.openeo_client.is_headless_or_wsl", return_value=True):
+        mock_conn = MagicMock()
+        mock_connect.return_value = mock_conn
+
+        conn = openeo_client.connect_and_auth("https://fake.openeo.backend")
+
+        mock_connect.assert_called_once_with("https://fake.openeo.backend")
+        mock_conn.authenticate_oidc_device.assert_called_once_with(store_refresh_token=True)
+        assert conn == mock_conn
+
+
+def test_connect_and_auth_fallback():
+    with patch("openeo.connect") as mock_connect, \
+         patch("openeo2mintpy.openeo_client.is_headless_or_wsl", return_value=False):
+        mock_conn = MagicMock()
+        mock_conn.authenticate_oidc.side_effect = Exception("Browser not available")
+        mock_connect.return_value = mock_conn
+
+        conn = openeo_client.connect_and_auth("https://fake.openeo.backend")
+
+        mock_connect.assert_called_once_with("https://fake.openeo.backend")
+        mock_conn.authenticate_oidc.assert_called_once_with(store_refresh_token=True)
+        mock_conn.authenticate_oidc_device.assert_called_once_with(store_refresh_token=True)
         assert conn == mock_conn
 
 
