@@ -692,18 +692,22 @@ class OpenEO2MintpyApp(tk.Tk):
         )
         self._worker.start()
 
-    def _run_split_worker(self, openeo_dir: str, unw_out_dir: str, cor_out_dir: str) -> None:
+    def _run_split_worker(
+        self, openeo_dir: str, unw_out_dir: str, cor_out_dir: str
+    ) -> None:
         try:
             from openeo2mintpy.align import align_rasters
             from openeo2mintpy.split import split_openeo_bands
 
             def split_progress_cb(current: int, total: int) -> None:
                 pct = (current / total * 50.0) if total else 0.0
-                self._log_queue.put(f"__split_progress__:{pct:.1f}:Splitting... {current}/{total}")
+                msg = f"__split_progress__:{pct:.1f}:Splitting... {current}/{total}"
+                self._log_queue.put(msg)
 
             def align_progress_cb(current: int, total: int) -> None:
                 pct = 50.0 + (current / total * 50.0) if total else 50.0
-                self._log_queue.put(f"__split_progress__:{pct:.1f}:Aligning... {current}/{total}")
+                msg = f"__split_progress__:{pct:.1f}:Aligning... {current}/{total}"
+                self._log_queue.put(msg)
 
             def log_cb(message: str) -> None:
                 self._log_queue.put(message)
@@ -1463,7 +1467,10 @@ class OpenEO2MintpyApp(tk.Tk):
                     self.split_run_btn.configure(state="normal")
                     messagebox.showerror(
                         "Split & Align failed",
-                        "The split & align process did not complete successfully. See log for details.",
+                        (
+                            "The split & align process did not complete successfully. "
+                            "See log for details."
+                        ),
                     )
                 elif msg == "__dem_done__:ok":
                     self.split_progress.configure(value=100)
