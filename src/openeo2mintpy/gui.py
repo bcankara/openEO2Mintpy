@@ -544,10 +544,25 @@ class OpenEO2MintpyApp(tk.Tk):
             bbox_frame, textvariable=self._entries["openeo_bbox_west"], width=9
         ).grid(row=1, column=3, sticky="ew", pady=1, padx=2)
 
+        self.openeo_find_bursts_btn = ttk.Button(
+            query_frame,
+            text="\U0001F50D Find Bursts for ROI",
+            command=self._run_find_bursts,
+        )
+        self.openeo_find_bursts_btn.grid(
+            row=5, column=0, columnspan=4, sticky="ew", pady=(4, 1), padx=2
+        )
+        Tooltip(
+            self.openeo_find_bursts_btn,
+            "Query CDSE catalogue to find all available Sentinel-1 Track / Burst ID / Swath\n"
+            "combinations within the current bounding box and date range.\n"
+            "Select a row from the results to auto-populate Track, Burst ID, Direction, and Sub-Swath.",
+        )
+
         self.openeo_query_btn = ttk.Button(
             query_frame, text="Query Catalogue & Select Pairs", command=self._run_openeo_query
         )
-        self.openeo_query_btn.grid(row=5, column=0, columnspan=4, sticky="ew", pady=4, padx=2)
+        self.openeo_query_btn.grid(row=6, column=0, columnspan=4, sticky="ew", pady=4, padx=2)
         Tooltip(
             self.openeo_query_btn,
             "Search CDSE catalogue for burst dates and list matching pairs."
@@ -617,6 +632,7 @@ class OpenEO2MintpyApp(tk.Tk):
         # Disable buttons if openeo is not installed
         if not HAS_OPENEO:
             self.openeo_connect_btn.configure(state="disabled")
+            self.openeo_find_bursts_btn.configure(state="disabled")
             self.openeo_query_btn.configure(state="disabled")
             self.openeo_submit_btn.configure(state="disabled")
             self.openeo_status_btn.configure(state="disabled")
@@ -724,6 +740,8 @@ class OpenEO2MintpyApp(tk.Tk):
             self.next_click_corner = "NW"
             self._openeo_log(f"Map Click: Southeast corner set to: Lat {lat:.5f}, Lon {lon:.5f}")
             self.status_var.set("Southeast set. Next click will set Northwest.")
+            # Normalize after both corners are set
+            self._normalize_bbox()
 
     def _set_nw_corner(self, coords: tuple[float, float]) -> None:
         lat, lon = coords
@@ -740,6 +758,58 @@ class OpenEO2MintpyApp(tk.Tk):
         self.next_click_corner = "NW"
         self._openeo_log(f"Menu Selection: Southeast corner set to: Lat {lat:.5f}, Lon {lon:.5f}")
         self.status_var.set("Southeast corner set.")
+        self._normalize_bbox()
+
+    def _normalize_bbox(self) -> None:
+        """Ensure North >= South and East >= West, swapping if necessary."""
+        try:
+            n = float(self._entries["openeo_bbox_north"].get().strip())
+            s = float(self._entries["openeo_bbox_south"].get().strip())
+            e = float(self._entries["openeo_bbox_east"].get().strip())
+            w = float(self._entries["openeo_bbox_west"].get().strip())
+        except ValueError:
+            return  # Incomplete values; skip normalization
+
+        swapped = False
+        if n < s:
+            n, s = s, n
+            swapped = True
+        if e < w:
+            e, w = w, e
+            swapped = True
+
+        if swapped:
+            # Temporarily remove traces to prevent recursion
+            for key in (
+                "openeo_bbox_north",
+                "openeo_bbox_south",
+                "openeo_bbox_east",
+                "openeo_bbox_west",
+            ):
+                self._entries[key].trace_remove(
+                    "write",
+                    self._entries[key].trace_info()[0][1],
+                )
+
+            self._entries["openeo_bbox_north"].set(f"{n:.5f}")
+            self._entries["openeo_bbox_south"].set(f"{s:.5f}")
+            self._entries["openeo_bbox_east"].set(f"{e:.5f}")
+            self._entries["openeo_bbox_west"].set(f"{w:.5f}")
+
+            # Re-attach traces
+            for key in (
+                "openeo_bbox_north",
+                "openeo_bbox_south",
+                "openeo_bbox_east",
+                "openeo_bbox_west",
+            ):
+                self._entries[key].trace_add("write", self._on_bbox_change)
+
+            self._openeo_log(
+                f"Auto-normalized BBox: N={n:.5f} S={s:.5f} E={e:.5f} W={w:.5f}"
+            )
+            # Redraw polygon
+            self._on_bbox_change()
 
     def _openeo_log(self, message: str) -> None:
         self.openeo_log.configure(state="normal")
@@ -776,8 +846,16 @@ class OpenEO2MintpyApp(tk.Tk):
         self._worker.start()
 
     def _run_openeo_connect_worker(self, backend_url: str) -> None:
+        def _oidc_display(msg, end="\n"):
+            """Route OIDC device-code display messages through the log queue."""
+            text = str(msg).strip()
+            if text:
+                self._log_queue.put(f"[openeo] {text}")
+
         try:
-            conn = openeo_client.connect_and_auth(backend_url)
+            conn = openeo_client.connect_and_auth(
+                backend_url, display=_oidc_display
+            )
             self.openeo_connection = conn
             self._log_queue.put("[openeo] Connection and OIDC authentication successful.")
             self._log_queue.put("__openeo_connect__:ok")
@@ -785,6 +863,104 @@ class OpenEO2MintpyApp(tk.Tk):
             logger.exception("openEO Connection failed")
             self._log_queue.put(f"[openeo] Connection failed: {exc}")
             self._log_queue.put("__openeo_connect__:error")
+
+    def _run_find_bursts(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        # Read inputs
+        start_date = self._entries["openeo_start_date"].get().strip()
+        end_date = self._entries["openeo_end_date"].get().strip()
+        polarisation = self._entries["openeo_polarisation"].get().strip()
+        n = self._entries["openeo_bbox_north"].get().strip()
+        s = self._entries["openeo_bbox_south"].get().strip()
+        e = self._entries["openeo_bbox_east"].get().strip()
+        w = self._entries["openeo_bbox_west"].get().strip()
+
+        errors = []
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            errors.append("Dates must be in YYYY-MM-DD format.")
+
+        try:
+            fn = float(n)
+            fs = float(s)
+            fe = float(e)
+            fw = float(w)
+            if not (-90 <= fn <= 90 and -90 <= fs <= 90):
+                errors.append("Latitude must be between -90 and 90.")
+            if not (-180 <= fe <= 180 and -180 <= fw <= 180):
+                errors.append("Longitude must be between -180 and 180.")
+            # Auto-swap instead of erroring
+            if fn < fs:
+                fn, fs = fs, fn
+                self._entries["openeo_bbox_north"].set(f"{fn:.5f}")
+                self._entries["openeo_bbox_south"].set(f"{fs:.5f}")
+            if fe < fw:
+                fe, fw = fw, fe
+                self._entries["openeo_bbox_east"].set(f"{fe:.5f}")
+                self._entries["openeo_bbox_west"].set(f"{fw:.5f}")
+            n, s, e, w = f"{fn:.5f}", f"{fs:.5f}", f"{fe:.5f}", f"{fw:.5f}"
+        except ValueError:
+            errors.append("Bounding Box coordinates must be valid numbers.")
+
+        if errors:
+            messagebox.showerror("Invalid inputs", "\n".join(f"- {err}" for err in errors))
+            return
+
+        self.openeo_find_bursts_btn.configure(state="disabled")
+        self._openeo_running = True
+        self.status_var.set("Querying CDSE Catalogue...")
+        self._openeo_log_clear()
+        self._openeo_log("Starting catalog search for unique bursts in ROI...")
+
+        aoi_wkt = f"POLYGON(({w} {s}, {w} {n}, {e} {n}, {e} {s}, {w} {s}))"
+
+        self._worker = threading.Thread(
+            target=self._run_find_bursts_worker,
+            args=(start_date, end_date, polarisation, aoi_wkt),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_find_bursts_worker(
+        self,
+        start_date: str,
+        end_date: str,
+        polarisation: str,
+        aoi_wkt: str,
+    ) -> None:
+        try:
+            self._log_queue.put(
+                f"[openeo] Querying burst acquisitions between {start_date} and {end_date}..."
+            )
+            bursts = openeo_client.query_burst_acquisitions(
+                start_date=start_date,
+                end_date=end_date,
+                polarisation=polarisation,
+                aoi_wkt=aoi_wkt
+            )
+            self._log_queue.put(
+                f"[openeo] Total burst acquisitions returned from catalogue: {len(bursts)}"
+            )
+
+            unique_bursts = openeo_client.extract_unique_bursts(bursts)
+            self._log_queue.put(
+                f"[openeo] Found {len(unique_bursts)} unique Track/Burst combinations."
+            )
+
+            if not unique_bursts:
+                self._log_queue.put("__openeo_find_bursts__:empty")
+            else:
+                self.found_bursts = unique_bursts
+                self._log_queue.put("__openeo_find_bursts__:ok")
+        except Exception as exc:
+            logger.exception("openEO burst search failed")
+            self._log_queue.put(f"[openeo] Burst search failed: {exc}")
+            self._log_queue.put("__openeo_find_bursts__:error")
 
     def _run_openeo_query(self) -> None:
         if self._worker is not None and self._worker.is_alive():
@@ -833,10 +1009,16 @@ class OpenEO2MintpyApp(tk.Tk):
                 errors.append("Latitude must be between -90 and 90.")
             if not (-180 <= fe <= 180 and -180 <= fw <= 180):
                 errors.append("Longitude must be between -180 and 180.")
-            if fn <= fs:
-                errors.append("North latitude must be greater than South latitude.")
-            if fe <= fw:
-                errors.append("East longitude must be greater than West longitude.")
+            # Auto-swap instead of erroring
+            if fn < fs:
+                fn, fs = fs, fn
+                self._entries["openeo_bbox_north"].set(f"{fn:.5f}")
+                self._entries["openeo_bbox_south"].set(f"{fs:.5f}")
+            if fe < fw:
+                fe, fw = fw, fe
+                self._entries["openeo_bbox_east"].set(f"{fe:.5f}")
+                self._entries["openeo_bbox_west"].set(f"{fw:.5f}")
+            n, s, e, w = f"{fn:.5f}", f"{fs:.5f}", f"{fe:.5f}", f"{fw:.5f}"
         except ValueError:
             errors.append("Bounding Box coordinates must be valid numbers.")
 
@@ -2258,6 +2440,21 @@ class OpenEO2MintpyApp(tk.Tk):
                         "The download directory has been auto-populated in the "
                         "'0. Split & Align' tab."
                     )
+                elif msg == "__openeo_find_bursts__:ok":
+                    self._openeo_running = False
+                    self.openeo_find_bursts_btn.configure(state="normal")
+                    self.status_var.set("Burst search complete.")
+                    self._show_burst_selection_dialog()
+                elif msg == "__openeo_find_bursts__:empty":
+                    self._openeo_running = False
+                    self.openeo_find_bursts_btn.configure(state="normal")
+                    self.status_var.set("No bursts found.")
+                    messagebox.showinfo("No Results", "No Sentinel-1 bursts found within the selected ROI and dates.")
+                elif msg == "__openeo_find_bursts__:error":
+                    self._openeo_running = False
+                    self.openeo_find_bursts_btn.configure(state="normal")
+                    self.status_var.set("Burst search failed.")
+                    messagebox.showerror("Error", "Failed to query bursts from CDSE catalogue. See log for details.")
                 elif (
                     msg.startswith("__progress__:")
                     or msg == "__done__:ok"
@@ -2457,6 +2654,118 @@ class OpenEO2MintpyApp(tk.Tk):
 
         close_btn = ttk.Button(btn_frame, text="Close Dialog", command=popup.destroy)
         close_btn.pack(side="right")
+
+    def _show_burst_selection_dialog(self) -> None:
+        """Display a modal dialog with a Table of unique Sentinel-1 bursts in the ROI."""
+        popup = tk.Toplevel(self)
+        popup.title("Select Sentinel-1 Burst for ROI")
+        popup.geometry("680x450")
+        popup.transient(self)
+        popup.grab_set()
+
+        # Center the popup relative to self
+        popup.update_idletasks()
+        parent_x = self.winfo_x()
+        parent_y = self.winfo_y()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        w = 680
+        h = 450
+        x = parent_x + (parent_w - w) // 2
+        y = parent_y + (parent_h - h) // 2
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+
+        main_frame = ttk.Frame(popup, padding=15)
+        main_frame.pack(fill="both", expand=True)
+
+        # Header Label
+        ttk.Label(
+            main_frame,
+            text="CDSE Burst Catalogue Search Results",
+            font=("TkDefaultFont", 11, "bold"),
+            foreground="#1565c0",
+        ).pack(anchor="w", pady=(0, 5))
+
+        ttk.Label(
+            main_frame,
+            text="Select a row and click 'Select Burst' (or double-click) to populate Track and Burst ID details:",
+            font=("TkDefaultFont", 9),
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Middle Frame for Table and Scrollbar
+        table_frame = ttk.Frame(main_frame)
+        table_frame.pack(fill="both", expand=True, pady=(0, 15))
+
+        columns = ("track", "direction", "swath", "burst_id", "count")
+        tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+        tree.pack(side="left", fill="both", expand=True)
+
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+        scrollbar.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        # Column headings & widths
+        tree.heading("track", text="Relative Orbit (Track)", anchor="center")
+        tree.heading("direction", text="Direction", anchor="center")
+        tree.heading("swath", text="Sub-Swath", anchor="center")
+        tree.heading("burst_id", text="Burst ID", anchor="center")
+        tree.heading("count", text="Acquisitions", anchor="center")
+
+        tree.column("track", width=130, anchor="center")
+        tree.column("direction", width=110, anchor="center")
+        tree.column("swath", width=100, anchor="center")
+        tree.column("burst_id", width=110, anchor="center")
+        tree.column("count", width=110, anchor="center")
+
+        # Insert data
+        for b in getattr(self, "found_bursts", []):
+            tree.insert(
+                "",
+                "end",
+                values=(
+                    b["track"],
+                    b["direction"],
+                    b["swath"],
+                    b["burst_id"],
+                    b["count"],
+                ),
+            )
+
+        # Selection handler
+        def on_select():
+            selected = tree.selection()
+            if not selected:
+                messagebox.showwarning("Selection Required", "Please select a burst from the list.", parent=popup)
+                return
+            item = tree.item(selected[0])
+            val = item["values"]
+            
+            # Populate entry boxes
+            self._entries["openeo_track"].set(str(val[0]))
+            self._entries["openeo_direction"].set(str(val[1]))
+            self._entries["openeo_sub_swath"].set(str(val[2]))
+            self._entries["openeo_burst_id"].set(str(val[3]))
+            
+            # Log selection
+            self._openeo_log(
+                f"Selected Burst from Catalog: Track {val[0]} ({val[1]}), Swath {val[2]}, Burst ID {val[3]}"
+            )
+            popup.destroy()
+
+        def on_double_click(event):
+            on_select()
+
+        tree.bind("<Double-1>", on_double_click)
+
+        # Bottom Button Frame
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x")
+
+        cancel_btn = ttk.Button(btn_frame, text="Cancel", command=popup.destroy, width=12)
+        cancel_btn.pack(side="right", padx=(5, 0))
+
+        select_btn = ttk.Button(btn_frame, text="Select Burst", command=on_select, width=15)
+        select_btn.pack(side="right")
 
     # ------------------------------------------------------------------
     # Post-load fix tab

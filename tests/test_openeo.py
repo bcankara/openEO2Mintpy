@@ -268,3 +268,53 @@ def test_download_job_results(tmp_path):
     mock_conn.job.assert_called_once_with("test-job-uuid-1234")
     mock_job.get_results.assert_called_once()
     mock_results.download_files.assert_called_once_with(target=str(output_dir))
+
+
+def test_extract_unique_bursts():
+    bursts = [
+        {
+            "RelativeOrbitNumber": 14,
+            "OrbitDirection": "ASCENDING",
+            "SwathIdentifier": "IW1",
+            "BurstId": 30,
+            "PlatformSerialIdentifier": "A",
+        },
+        {
+            "RelativeOrbitNumber": 14,
+            "OrbitDirection": "ASCENDING",
+            "SwathIdentifier": "IW1",
+            "BurstId": 30,
+            "PlatformSerialIdentifier": "C",
+        },
+        {
+            "RelativeOrbitNumber": 14,
+            "OrbitDirection": "ASCENDING",
+            "SwathIdentifier": "IW1",
+            "BurstId": 30,
+            "PlatformSerialIdentifier": "B",  # Ignored
+        },
+        {
+            "RelativeOrbitNumber": 15,
+            "OrbitDirection": "DESCENDING",
+            "SwathIdentifier": "IW2",
+            "BurstId": 45,
+            "PlatformSerialIdentifier": "A",
+        },
+    ]
+
+    results = openeo_client.extract_unique_bursts(bursts)
+    assert len(results) == 2
+    assert results[0] == {
+        "track": 14,
+        "direction": "ASCENDING",
+        "swath": "IW1",
+        "burst_id": 30,
+        "count": 2,
+    }
+    assert results[1] == {
+        "track": 15,
+        "direction": "DESCENDING",
+        "swath": "IW2",
+        "burst_id": 45,
+        "count": 1,
+    }

@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 import openeo
 from openeo.internal.graph_building import PGNode
@@ -56,19 +56,36 @@ def is_headless_or_wsl() -> bool:
     return False
 
 
-def connect_and_auth(url: str = DEFAULT_BACKEND) -> openeo.Connection:
+def connect_and_auth(
+    url: str = DEFAULT_BACKEND,
+    display: Optional[Callable] = None,
+) -> openeo.Connection:
     """Connect to openEO backend and authenticate via OIDC.
 
     Falls back to Device Code flow in headless or WSL environments.
+
+    Parameters
+    ----------
+    url : str
+        openEO backend URL.
+    display : callable, optional
+        Custom display function for Device Code flow instructions.
+        Receives the verification URL/code message string.
+        If *None*, the openEO library default (``print``) is used.
     """
     logger.info("Connecting to openEO backend at %s", url)
     connection = openeo.connect(url)
 
     use_device_flow = is_headless_or_wsl()
 
+    # Build extra kwargs for authenticate_oidc_device
+    device_kwargs: dict[str, Any] = {}
+    if display is not None:
+        device_kwargs["display"] = display
+
     if use_device_flow:
         logger.info("Headless/WSL environment detected. Initiating OIDC Device Code flow...")
-        connection.authenticate_oidc_device(store_refresh_token=True)
+        connection.authenticate_oidc_device(store_refresh_token=True, **device_kwargs)
     else:
         logger.info("Authenticating via OIDC...")
         try:
@@ -78,7 +95,7 @@ def connect_and_auth(url: str = DEFAULT_BACKEND) -> openeo.Connection:
                 "OIDC authentication failed or blocked: %s. Falling back to Device Code flow...",
                 e,
             )
-            connection.authenticate_oidc_device(store_refresh_token=True)
+            connection.authenticate_oidc_device(store_refresh_token=True, **device_kwargs)
 
     logger.info("Authentication successful.")
     return connection
@@ -153,6 +170,40 @@ def filter_bursts(
             dates.add(date_str)
 
     return sorted(list(dates))
+
+
+def extract_unique_bursts(
+    bursts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Extract unique (Track, Direction, Swath, BurstId) combinations.
+
+    Returns a list of dicts, each with keys:
+    ``track``, ``direction``, ``swath``, ``burst_id``, ``count``.
+    Sorted by track, then burst_id.
+    """
+    combos: dict[tuple, int] = {}
+    for b in bursts:
+        platform = b.get("PlatformSerialIdentifier", "UNKNOWN")
+        if platform not in ["A", "C"]:
+            continue
+        key = (
+            b.get("RelativeOrbitNumber"),
+            b.get("OrbitDirection", "UNKNOWN"),
+            b.get("SwathIdentifier", "UNKNOWN"),
+            b.get("BurstId"),
+        )
+        combos[key] = combos.get(key, 0) + 1
+
+    results = []
+    for (track, direction, swath, burst_id), count in sorted(combos.items()):
+        results.append({
+            "track": track,
+            "direction": direction,
+            "swath": swath,
+            "burst_id": burst_id,
+            "count": count,
+        })
+    return results
 
 
 def generate_pairs(dates: list[str], max_baseline_days: int = 24) -> list[list[str]]:
