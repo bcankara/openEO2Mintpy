@@ -694,8 +694,8 @@ class OpenEO2MintpyApp(tk.Tk):
 
     def _run_split_worker(self, openeo_dir: str, unw_out_dir: str, cor_out_dir: str) -> None:
         try:
-            from openeo2mintpy.split import split_openeo_bands
             from openeo2mintpy.align import align_rasters
+            from openeo2mintpy.split import split_openeo_bands
 
             def progress_cb(current: int, total: int) -> None:
                 pct = (current / total * 100.0) if total else 0.0
