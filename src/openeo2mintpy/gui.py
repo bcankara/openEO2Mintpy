@@ -17,10 +17,12 @@ Features:
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import queue
 import threading
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -38,6 +40,16 @@ from openeo2mintpy.settings import (
     load_settings,
     save_settings,
 )
+
+try:
+    from tkintermapview import TkinterMapView
+    HAS_MAP = True
+except ImportError:
+    HAS_MAP = False
+
+HAS_OPENEO = importlib.util.find_spec("openeo") is not None
+if HAS_OPENEO:
+    from openeo2mintpy import openeo_client
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +293,12 @@ class OpenEO2MintpyApp(tk.Tk):
         self._entries: dict[str, tk.StringVar] = {}
         self._log_queue: queue.Queue[str] = queue.Queue()
         self._worker: threading.Thread | None = None
+        self._openeo_running = False
+        self._split_running = False
+        self.openeo_connection = None
+        self.next_click_corner = "NW"
+        self.map_polygon = None
+        self.query_groups = None
 
         self._build_style()
         self._build_widgets()
@@ -329,6 +347,7 @@ class OpenEO2MintpyApp(tk.Tk):
         self.notebook = ttk.Notebook(outer)
         self.notebook.pack(fill="both", expand=True)
 
+        self._build_dispatcher_tab(self.notebook)
         self._build_split_tab(self.notebook)
         self._build_prepare_tab(self.notebook)
         self._build_postprocess_tab(self.notebook)
@@ -337,6 +356,717 @@ class OpenEO2MintpyApp(tk.Tk):
         ttk.Label(outer, textvariable=self.status_var, style="Hint.TLabel").pack(
             anchor="w", pady=(4, 0)
         )
+
+    def _build_dispatcher_tab(self, notebook: ttk.Notebook) -> None:
+        """Tab 0: openEO CDSE Dispatcher & ROI Selection."""
+        tab = ttk.Frame(notebook, padding=10)
+        notebook.add(tab, text="0. openEO Dispatcher")
+
+        # Define default values for openEO-related variables
+        openeo_defaults = {
+            "openeo_backend": "https://openeo.dataspace.copernicus.eu",
+            "openeo_cwl_url": (
+                "https://raw.githubusercontent.com/cloudinsar/s1-workflows/"
+                "refs/heads/keep_snap_metadata/cwl/sar_interferogram.cwl"
+            ),
+            "openeo_start_date": "2024-01-01",
+            "openeo_end_date": "2024-12-31",
+            "openeo_polarisation": "VV",
+            "openeo_track": "14",
+            "openeo_direction": "ASCENDING",
+            "openeo_burst_id": "30",
+            "openeo_sub_swath": "IW1",
+            "openeo_bbox_north": "40.95",
+            "openeo_bbox_south": "40.80",
+            "openeo_bbox_east": "35.50",
+            "openeo_bbox_west": "35.30",
+            "openeo_max_baseline_days": "24",
+            "openeo_work_dir": "./openeo_inputs",
+            "openeo_job_ids": "",
+        }
+
+        for key, default in openeo_defaults.items():
+            if key not in self._entries:
+                self._entries[key] = tk.StringVar(value=default)
+
+        # Setup bbox write trace
+        for key in (
+            "openeo_bbox_north",
+            "openeo_bbox_south",
+            "openeo_bbox_east",
+            "openeo_bbox_west",
+        ):
+            self._entries[key].trace_add("write", self._on_bbox_change)
+
+        # Master pane layout: left for inputs (fixed width), right for map + log (expand)
+        left_pane = ttk.Frame(tab, padding=5, width=380)
+        left_pane.pack(side="left", fill="y", padx=(0, 5))
+        left_pane.pack_propagate(False)
+
+        right_pane = ttk.Frame(tab, padding=5)
+        right_pane.pack(side="right", fill="both", expand=True)
+
+        # ── Left Pane Contents ──
+        # Section 1: openEO Connection
+        conn_frame = ttk.LabelFrame(left_pane, text="  1. openEO Connection  ", padding=6)
+        conn_frame.pack(fill="x", pady=(0, 6))
+        conn_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(conn_frame, text="Backend URL").grid(
+            row=0, column=0, sticky="w", pady=2, padx=4
+        )
+        ttk.Entry(conn_frame, textvariable=self._entries["openeo_backend"]).grid(
+            row=0, column=1, sticky="ew", pady=2, padx=4
+        )
+
+        self.openeo_connect_btn = ttk.Button(
+            conn_frame, text="Connect (Browser Login)", command=self._run_openeo_connect
+        )
+        self.openeo_connect_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4, padx=4)
+        Tooltip(
+            self.openeo_connect_btn,
+            "Connect to openEO backend. Will open browser for OIDC authentication.",
+        )
+
+        # Section 2: Catalog Query & ROI
+        query_frame = ttk.LabelFrame(left_pane, text="  2. Catalogue Query & ROI  ", padding=6)
+        query_frame.pack(fill="x", pady=(0, 6))
+        query_frame.columnconfigure(1, weight=1)
+        query_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(query_frame, text="Start Date").grid(row=0, column=0, sticky="w", pady=2, padx=2)
+        ttk.Entry(query_frame, textvariable=self._entries["openeo_start_date"], width=11).grid(
+            row=0, column=1, sticky="ew", pady=2, padx=2
+        )
+
+        ttk.Label(query_frame, text="End Date").grid(row=0, column=2, sticky="w", pady=2, padx=2)
+        ttk.Entry(query_frame, textvariable=self._entries["openeo_end_date"], width=11).grid(
+            row=0, column=3, sticky="ew", pady=2, padx=2
+        )
+
+        ttk.Label(query_frame, text="Track").grid(row=1, column=0, sticky="w", pady=2, padx=2)
+        ttk.Entry(query_frame, textvariable=self._entries["openeo_track"], width=6).grid(
+            row=1, column=1, sticky="ew", pady=2, padx=2
+        )
+
+        ttk.Label(query_frame, text="Direction").grid(row=1, column=2, sticky="w", pady=2, padx=2)
+        ttk.Combobox(
+            query_frame,
+            textvariable=self._entries["openeo_direction"],
+            values=("ASCENDING", "DESCENDING"),
+            state="readonly",
+            width=10,
+        ).grid(row=1, column=3, sticky="ew", pady=2, padx=2)
+
+        ttk.Label(query_frame, text="Burst ID").grid(row=2, column=0, sticky="w", pady=2, padx=2)
+        ttk.Entry(query_frame, textvariable=self._entries["openeo_burst_id"], width=6).grid(
+            row=2, column=1, sticky="ew", pady=2, padx=2
+        )
+
+        ttk.Label(query_frame, text="Sub-Swath").grid(
+            row=2, column=2, sticky="w", pady=2, padx=2
+        )
+        ttk.Combobox(
+            query_frame,
+            textvariable=self._entries["openeo_sub_swath"],
+            values=("IW1", "IW2", "IW3"),
+            state="readonly",
+            width=6,
+        ).grid(row=2, column=3, sticky="ew", pady=2, padx=2)
+
+        ttk.Label(query_frame, text="Polarisation").grid(
+            row=3, column=0, sticky="w", pady=2, padx=2
+        )
+        ttk.Combobox(
+            query_frame,
+            textvariable=self._entries["openeo_polarisation"],
+            values=("VV", "VH"),
+            state="readonly",
+            width=6,
+        ).grid(row=3, column=1, sticky="ew", pady=2, padx=2)
+
+        # Compact 2x2 Grid for Bounding Box coordinates
+        bbox_frame = ttk.LabelFrame(query_frame, text="  Bounding Box (Map Linked)  ", padding=4)
+        bbox_frame.grid(row=4, column=0, columnspan=4, sticky="ew", pady=4)
+        bbox_frame.columnconfigure(1, weight=1)
+        bbox_frame.columnconfigure(3, weight=1)
+
+        ttk.Label(bbox_frame, text="North Lat").grid(
+            row=0, column=0, sticky="w", pady=1, padx=2
+        )
+        ttk.Entry(
+            bbox_frame, textvariable=self._entries["openeo_bbox_north"], width=9
+        ).grid(row=0, column=1, sticky="ew", pady=1, padx=2)
+
+        ttk.Label(bbox_frame, text="South Lat").grid(
+            row=0, column=2, sticky="w", pady=1, padx=2
+        )
+        ttk.Entry(
+            bbox_frame, textvariable=self._entries["openeo_bbox_south"], width=9
+        ).grid(row=0, column=3, sticky="ew", pady=1, padx=2)
+
+        ttk.Label(bbox_frame, text="East Lon").grid(
+            row=1, column=0, sticky="w", pady=1, padx=2
+        )
+        ttk.Entry(
+            bbox_frame, textvariable=self._entries["openeo_bbox_east"], width=9
+        ).grid(row=1, column=1, sticky="ew", pady=1, padx=2)
+
+        ttk.Label(bbox_frame, text="West Lon").grid(
+            row=1, column=2, sticky="w", pady=1, padx=2
+        )
+        ttk.Entry(
+            bbox_frame, textvariable=self._entries["openeo_bbox_west"], width=9
+        ).grid(row=1, column=3, sticky="ew", pady=1, padx=2)
+
+        self.openeo_query_btn = ttk.Button(
+            query_frame, text="Query Catalogue & Select Pairs", command=self._run_openeo_query
+        )
+        self.openeo_query_btn.grid(row=5, column=0, columnspan=4, sticky="ew", pady=4, padx=2)
+        Tooltip(
+            self.openeo_query_btn,
+            "Search CDSE catalogue for burst dates and list matching pairs."
+        )
+
+        # Section 3: Job Submission & Status
+        job_frame = ttk.LabelFrame(left_pane, text="  3. InSAR Job Dispatch & Control  ", padding=6)
+        job_frame.pack(fill="x", pady=(0, 6))
+        job_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(job_frame, text="Max Baseline (days)").grid(
+            row=0, column=0, sticky="w", pady=2, padx=4
+        )
+        ttk.Entry(
+            job_frame, textvariable=self._entries["openeo_max_baseline_days"], width=6
+        ).grid(row=0, column=1, sticky="w", pady=2, padx=4)
+
+        self.openeo_submit_btn = ttk.Button(
+            job_frame, text="Submit Job Parts", command=self._run_openeo_submit, state="disabled"
+        )
+        self.openeo_submit_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4, padx=4)
+        Tooltip(
+            self.openeo_submit_btn,
+            "Submit processing batch job parts to openEO (requires query first)."
+        )
+
+        ttk.Label(job_frame, text="Job ID(s)").grid(row=2, column=0, sticky="w", pady=2, padx=4)
+        ttk.Entry(
+            job_frame, textvariable=self._entries["openeo_job_ids"]
+        ).grid(row=2, column=1, sticky="ew", pady=2, padx=4)
+
+        btn_row = ttk.Frame(job_frame)
+        btn_row.grid(row=3, column=0, columnspan=2, sticky="ew", pady=4, padx=4)
+        btn_row.columnconfigure(0, weight=1)
+        btn_row.columnconfigure(1, weight=1)
+
+        self.openeo_status_btn = ttk.Button(
+            btn_row, text="Query Status", command=self._run_openeo_status
+        )
+        self.openeo_status_btn.grid(row=0, column=0, sticky="ew", padx=(0, 2))
+        Tooltip(self.openeo_status_btn, "Check status of the specified Job ID(s).")
+
+        self.openeo_download_btn = ttk.Button(
+            btn_row, text="Download Results", command=self._run_openeo_download
+        )
+        self.openeo_download_btn.grid(row=0, column=1, sticky="ew", padx=(2, 0))
+        Tooltip(self.openeo_download_btn, "Download finished job outputs to local folder.")
+
+        # Section 4: Output Folder Configuration
+        out_frame = ttk.LabelFrame(left_pane, text="  4. Output Folder  ", padding=6)
+        out_frame.pack(fill="x", pady=(0, 6))
+        out_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(out_frame, text="Download Dir").grid(row=0, column=0, sticky="w", pady=2, padx=4)
+        ttk.Entry(
+            out_frame, textvariable=self._entries["openeo_work_dir"]
+        ).grid(row=0, column=1, sticky="ew", pady=2, padx=4)
+
+        browse_btn = ttk.Button(
+            out_frame,
+            text="Browse...",
+            width=9,
+            command=lambda: self._browse_split_dir("openeo_work_dir", False),
+        )
+        browse_btn.grid(row=0, column=2, sticky="e", pady=2, padx=(4, 0))
+
+        # Disable buttons if openeo is not installed
+        if not HAS_OPENEO:
+            self.openeo_connect_btn.configure(state="disabled")
+            self.openeo_query_btn.configure(state="disabled")
+            self.openeo_submit_btn.configure(state="disabled")
+            self.openeo_status_btn.configure(state="disabled")
+            self.openeo_download_btn.configure(state="disabled")
+            messagebox.showwarning(
+                "Missing Dependencies",
+                "openEO Python Client is not installed. Please run 'pip install openeo' "
+                "to enable openEO job management."
+            )
+
+        # ── Right Pane Contents ──
+        # Top: Map
+        map_frame = ttk.LabelFrame(
+            right_pane,
+            text="  Interactive ROI Selection (Double-Click / Right-Click)  ",
+            padding=5,
+        )
+        map_frame.pack(fill="both", expand=True)
+
+        if HAS_MAP:
+            self.map_widget = TkinterMapView(map_frame, corner_radius=0)
+            self.map_widget.pack(fill="both", expand=True)
+            # Default center: Merzifon, Turkey (lat=40.897, lng=35.422), zoom 10
+            self.map_widget.set_position(40.897, 35.422)
+            self.map_widget.set_zoom(10)
+
+            # Bind callbacks
+            self.map_widget.add_left_click_map_command(self._map_click_cb)
+            self.map_widget.add_right_click_menu_command(
+                "Set Northwest (NW) Corner", self._set_nw_corner, pass_coords=True
+            )
+            self.map_widget.add_right_click_menu_command(
+                "Set Southeast (SE) Corner", self._set_se_corner, pass_coords=True
+            )
+
+            # Draw initial polygon if values are present
+            self._on_bbox_change()
+        else:
+            placeholder = ttk.Label(
+                map_frame,
+                text=(
+                    "Map view requires 'tkintermapview' package.\n"
+                    "Install it using: pip install tkintermapview"
+                ),
+                justify="center",
+                font=("TkDefaultFont", 10, "italic")
+            )
+            placeholder.pack(expand=True)
+
+        # Bottom: openEO Log
+        log_frame = ttk.LabelFrame(right_pane, text="  openEO Dispatcher Log  ", padding=5)
+        log_frame.pack(fill="x", side="bottom", pady=(5, 0))
+        self.openeo_log = scrolledtext.ScrolledText(
+            log_frame,
+            height=11,
+            state="disabled",
+            wrap="word",
+            font=("TkFixedFont", 9),
+        )
+        self.openeo_log.pack(fill="both", expand=True)
+
+    def _on_bbox_change(self, *args) -> None:
+        if not hasattr(self, "map_widget") or self.map_widget is None or not HAS_MAP:
+            return
+
+        try:
+            n = float(self._entries["openeo_bbox_north"].get().strip())
+            s = float(self._entries["openeo_bbox_south"].get().strip())
+            e = float(self._entries["openeo_bbox_east"].get().strip())
+            w = float(self._entries["openeo_bbox_west"].get().strip())
+        except ValueError:
+            return  # Incomplete or invalid floats, don't draw polygon yet
+
+        # Remove old polygon if exists
+        if self.map_polygon:
+            try:
+                self.map_polygon.delete()
+            except Exception:
+                pass
+            self.map_polygon = None
+
+        # Draw new bounding box polygon
+        coords = [(n, w), (n, e), (s, e), (s, w), (n, w)]
+        try:
+            self.map_polygon = self.map_widget.set_polygon(
+                coords,
+                outline_color="#1565c0",
+                fill_color=None,
+                border_width=3
+            )
+        except Exception as exc:
+            logger.debug("Failed to set map polygon: %s", exc)
+
+    def _map_click_cb(self, coords: tuple[float, float]) -> None:
+        lat, lon = coords
+        if self.next_click_corner == "NW":
+            self._entries["openeo_bbox_north"].set(f"{lat:.5f}")
+            self._entries["openeo_bbox_west"].set(f"{lon:.5f}")
+            self.next_click_corner = "SE"
+            self._openeo_log(f"Map Click: Northwest corner set to: Lat {lat:.5f}, Lon {lon:.5f}")
+            self.status_var.set("Northwest set. Next click will set Southeast.")
+        else:
+            self._entries["openeo_bbox_south"].set(f"{lat:.5f}")
+            self._entries["openeo_bbox_east"].set(f"{lon:.5f}")
+            self.next_click_corner = "NW"
+            self._openeo_log(f"Map Click: Southeast corner set to: Lat {lat:.5f}, Lon {lon:.5f}")
+            self.status_var.set("Southeast set. Next click will set Northwest.")
+
+    def _set_nw_corner(self, coords: tuple[float, float]) -> None:
+        lat, lon = coords
+        self._entries["openeo_bbox_north"].set(f"{lat:.5f}")
+        self._entries["openeo_bbox_west"].set(f"{lon:.5f}")
+        self.next_click_corner = "SE"
+        self._openeo_log(f"Menu Selection: Northwest corner set to: Lat {lat:.5f}, Lon {lon:.5f}")
+        self.status_var.set("Northwest corner set.")
+
+    def _set_se_corner(self, coords: tuple[float, float]) -> None:
+        lat, lon = coords
+        self._entries["openeo_bbox_south"].set(f"{lat:.5f}")
+        self._entries["openeo_bbox_east"].set(f"{lon:.5f}")
+        self.next_click_corner = "NW"
+        self._openeo_log(f"Menu Selection: Southeast corner set to: Lat {lat:.5f}, Lon {lon:.5f}")
+        self.status_var.set("Southeast corner set.")
+
+    def _openeo_log(self, message: str) -> None:
+        self.openeo_log.configure(state="normal")
+        self.openeo_log.insert("end", message + "\n")
+        self.openeo_log.see("end")
+        self.openeo_log.configure(state="disabled")
+
+    def _openeo_log_clear(self) -> None:
+        self.openeo_log.configure(state="normal")
+        self.openeo_log.delete("1.0", "end")
+        self.openeo_log.configure(state="disabled")
+
+    def _run_openeo_connect(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        backend_url = self._entries["openeo_backend"].get().strip()
+        if not backend_url:
+            messagebox.showerror("Invalid inputs", "Backend URL is required.")
+            return
+
+        self.openeo_connect_btn.configure(state="disabled")
+        self._openeo_running = True
+        self.status_var.set("Connecting to openEO (Browser authentication)...")
+        self._openeo_log_clear()
+        self._openeo_log("Starting openEO OIDC connection sequence...")
+
+        self._worker = threading.Thread(
+            target=self._run_openeo_connect_worker,
+            args=(backend_url,),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_openeo_connect_worker(self, backend_url: str) -> None:
+        try:
+            conn = openeo_client.connect_and_auth(backend_url)
+            self.openeo_connection = conn
+            self._log_queue.put("[openeo] Connection and OIDC authentication successful.")
+            self._log_queue.put("__openeo_connect__:ok")
+        except Exception as exc:
+            logger.exception("openEO Connection failed")
+            self._log_queue.put(f"[openeo] Connection failed: {exc}")
+            self._log_queue.put("__openeo_connect__:error")
+
+    def _run_openeo_query(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        # Read and validate inputs
+        start_date = self._entries["openeo_start_date"].get().strip()
+        end_date = self._entries["openeo_end_date"].get().strip()
+        pol = self._entries["openeo_polarisation"].get().strip()
+        track = self._entries["openeo_track"].get().strip()
+        burst_id = self._entries["openeo_burst_id"].get().strip()
+        sub_swath = self._entries["openeo_sub_swath"].get().strip()
+        max_baseline = self._entries["openeo_max_baseline_days"].get().strip()
+        n = self._entries["openeo_bbox_north"].get().strip()
+        s = self._entries["openeo_bbox_south"].get().strip()
+        e = self._entries["openeo_bbox_east"].get().strip()
+        w = self._entries["openeo_bbox_west"].get().strip()
+
+        errors = []
+        try:
+            t_val = int(track)
+        except ValueError:
+            errors.append("Track must be an integer.")
+        try:
+            b_val = int(burst_id)
+        except ValueError:
+            errors.append("Burst ID must be an integer.")
+        try:
+            mb_val = int(max_baseline)
+        except ValueError:
+            errors.append("Max baseline must be an integer.")
+
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            errors.append("Dates must be in YYYY-MM-DD format.")
+
+        try:
+            fn = float(n)
+            fs = float(s)
+            fe = float(e)
+            fw = float(w)
+            if not (-90 <= fn <= 90 and -90 <= fs <= 90):
+                errors.append("Latitude must be between -90 and 90.")
+            if not (-180 <= fe <= 180 and -180 <= fw <= 180):
+                errors.append("Longitude must be between -180 and 180.")
+            if fn <= fs:
+                errors.append("North latitude must be greater than South latitude.")
+            if fe <= fw:
+                errors.append("East longitude must be greater than West longitude.")
+        except ValueError:
+            errors.append("Bounding Box coordinates must be valid numbers.")
+
+        if errors:
+            messagebox.showerror("Invalid inputs", "\n".join(f"- {err}" for err in errors))
+            return
+
+        self.openeo_query_btn.configure(state="disabled")
+        self._openeo_running = True
+        self.status_var.set("Querying CDSE Catalogue...")
+        self._openeo_log_clear()
+        self._openeo_log("Starting catalog query...")
+
+        aoi_wkt = f"POLYGON(({w} {s}, {w} {n}, {e} {n}, {e} {s}, {w} {s}))"
+
+        self._worker = threading.Thread(
+            target=self._run_openeo_query_worker,
+            args=(start_date, end_date, pol, t_val, b_val, sub_swath, aoi_wkt, mb_val),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_openeo_query_worker(
+        self,
+        start_date,
+        end_date,
+        polarisation,
+        track,
+        burst_id,
+        sub_swath,
+        aoi_wkt,
+        max_baseline_days,
+    ) -> None:
+        try:
+            self._log_queue.put(
+                f"[openeo] Querying burst acquisitions between {start_date} and {end_date}..."
+            )
+            bursts = openeo_client.query_burst_acquisitions(
+                start_date=start_date,
+                end_date=end_date,
+                polarisation=polarisation,
+                aoi_wkt=aoi_wkt
+            )
+            self._log_queue.put(
+                f"[openeo] Total burst acquisitions returned from catalogue: {len(bursts)}"
+            )
+
+            dates = openeo_client.filter_bursts(
+                bursts=bursts,
+                track=track,
+                burst_id=burst_id,
+                sub_swath=sub_swath
+            )
+            self._log_queue.put(f"[openeo] Unique matching dates found: {len(dates)}")
+            for d in dates:
+                self._log_queue.put(f"  - {d}")
+
+            if not dates:
+                self._log_queue.put("[openeo] No matching dates found. Cannot generate pairs.")
+                self._log_queue.put("__openeo_query__:error")
+                return
+
+            pairs = openeo_client.generate_pairs(dates, max_baseline_days)
+            self._log_queue.put(f"[openeo] Generated {len(pairs)} interferogram pairs:")
+            for p in pairs:
+                self._log_queue.put(f"  - {p[0]} -> {p[1]}")
+
+            if not pairs:
+                self._log_queue.put(
+                    "[openeo] No pairs generated (temporal baseline too short/long)."
+                )
+                self._log_queue.put("__openeo_query__:error")
+                return
+
+            groups = openeo_client.split_pairs_into_groups(pairs)
+            self.query_groups = groups
+            self._log_queue.put(f"[openeo] Split pairs into {len(groups)} batch job part(s):")
+            for idx, group in enumerate(groups, 1):
+                self._log_queue.put(f"  Part {idx}: {len(group)} pairs starting with {group[0][0]}")
+
+            self._log_queue.put("__openeo_query__:ok")
+        except Exception as exc:
+            logger.exception("openEO query failed")
+            self._log_queue.put(f"[openeo] Query failed: {exc}")
+            self._log_queue.put("__openeo_query__:error")
+
+    def _run_openeo_submit(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        if not self.openeo_connection:
+            messagebox.showerror("Not connected", "Please connect to openEO first.")
+            return
+
+        if not self.query_groups:
+            messagebox.showerror("No pairs", "Please query dates and generate pairs first.")
+            return
+
+        track = int(self._entries["openeo_track"].get().strip())
+        direction = self._entries["openeo_direction"].get().strip()
+        burst_id = int(self._entries["openeo_burst_id"].get().strip())
+        sub_swath = self._entries["openeo_sub_swath"].get().strip()
+        cwl_url = self._entries["openeo_cwl_url"].get().strip()
+
+        self.openeo_submit_btn.configure(state="disabled")
+        self._openeo_running = True
+        self.status_var.set("Submitting InSAR batch jobs...")
+        self._openeo_log("Submitting batch jobs to openEO...")
+
+        self._worker = threading.Thread(
+            target=self._run_openeo_submit_worker,
+            args=(track, direction, burst_id, sub_swath, cwl_url),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_openeo_submit_worker(self, track, direction, burst_id, sub_swath, cwl_url) -> None:
+        try:
+            submitted_ids = []
+            total_parts = len(self.query_groups)
+            for idx, group in enumerate(self.query_groups, 1):
+                self._log_queue.put(
+                    f"[openeo] Submitting Job Part {idx}/{total_parts} ({len(group)} pairs)..."
+                )
+                job_info = openeo_client.submit_insar_job(
+                    connection=self.openeo_connection,
+                    track=track,
+                    direction=direction,
+                    burst_id=burst_id,
+                    sub_swath=sub_swath,
+                    group_pairs=group,
+                    part_num=idx,
+                    total_parts=total_parts,
+                    cwl_url=cwl_url,
+                )
+                job_id = job_info["job_id"]
+                submitted_ids.append(job_id)
+                self._log_queue.put(f"[openeo] Successfully created Job ID: {job_id}")
+
+            self._log_queue.put(f"__openeo_submit__:ok:{','.join(submitted_ids)}")
+        except Exception as exc:
+            logger.exception("openEO submission failed")
+            self._log_queue.put(f"[openeo] Submission failed: {exc}")
+            self._log_queue.put("__openeo_submit__:error")
+
+    def _run_openeo_status(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        if not self.openeo_connection:
+            messagebox.showerror("Not connected", "Please connect to openEO first.")
+            return
+
+        job_ids_str = self._entries["openeo_job_ids"].get().strip()
+        job_ids = [jid.strip() for jid in job_ids_str.split(",") if jid.strip()]
+
+        if not job_ids:
+            messagebox.showerror("No Job ID", "Please specify one or more comma-separated Job IDs.")
+            return
+
+        self.openeo_status_btn.configure(state="disabled")
+        self._openeo_running = True
+        self.status_var.set("Checking job status...")
+        self._openeo_log("Querying status of batch jobs...")
+
+        self._worker = threading.Thread(
+            target=self._run_openeo_status_worker,
+            args=(job_ids,),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_openeo_status_worker(self, job_ids: list[str]) -> None:
+        try:
+            for jid in job_ids:
+                self._log_queue.put(f"[openeo] Fetching status for Job {jid}...")
+                job = self.openeo_connection.job(jid)
+                desc = job.describe_job()
+                status = desc.get("status", "unknown")
+                title = desc.get("title", "no title")
+                self._log_queue.put(f"[openeo] Job: '{title}'")
+                self._log_queue.put(f"  Status: {status.upper()}")
+                if desc.get("error"):
+                    self._log_queue.put(f"  Error: {desc['error']}")
+                progress = desc.get("progress")
+                if progress is not None:
+                    self._log_queue.put(f"  Progress: {progress}%")
+            self._log_queue.put("__openeo_status__:done")
+        except Exception as exc:
+            logger.exception("openEO status check failed")
+            self._log_queue.put(f"[openeo] Status check failed: {exc}")
+            self._log_queue.put("__openeo_status__:done")
+
+    def _run_openeo_download(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            messagebox.showinfo("Run", "An operation is already in progress.")
+            return
+
+        if not self.openeo_connection:
+            messagebox.showerror("Not connected", "Please connect to openEO first.")
+            return
+
+        job_ids_str = self._entries["openeo_job_ids"].get().strip()
+        job_ids = [jid.strip() for jid in job_ids_str.split(",") if jid.strip()]
+
+        if not job_ids:
+            messagebox.showerror("No Job ID", "Please specify one or more comma-separated Job IDs.")
+            return
+
+        work_dir = self._entries["openeo_work_dir"].get().strip()
+        if not work_dir:
+            messagebox.showerror("No directory", "Please specify a download directory.")
+            return
+
+        self.openeo_download_btn.configure(state="disabled")
+        self._openeo_running = True
+        self.status_var.set("Downloading job results...")
+        self._openeo_log(f"Downloading finished job results to {work_dir}...")
+
+        self._worker = threading.Thread(
+            target=self._run_openeo_download_worker,
+            args=(job_ids, work_dir),
+            daemon=True,
+        )
+        self._worker.start()
+
+    def _run_openeo_download_worker(self, job_ids: list[str], work_dir: str) -> None:
+        try:
+            total_files = 0
+            for jid in job_ids:
+                self._log_queue.put(f"[openeo] Downloading Job {jid} results...")
+                # Verify status first to avoid blocking on incomplete jobs
+                job = self.openeo_connection.job(jid)
+                status = job.describe_job().get("status", "unknown")
+                if status != "finished":
+                    self._log_queue.put(
+                        f"[openeo] Skipping Job {jid} (status: {status}). "
+                        "Only 'finished' jobs can be downloaded."
+                    )
+                    continue
+                files_count = openeo_client.download_job_results(
+                    self.openeo_connection, jid, work_dir
+                )
+                self._log_queue.put(f"[openeo] Downloaded {files_count} files for Job {jid}.")
+                total_files += files_count
+            self._log_queue.put(
+                f"[openeo] Download complete. Total files downloaded: {total_files}"
+            )
+            self._log_queue.put("__openeo_download__:done")
+        except Exception as exc:
+            logger.exception("openEO download failed")
+            self._log_queue.put(f"[openeo] Download failed: {exc}")
+            self._log_queue.put("__openeo_download__:done")
 
     def _build_split_tab(self, notebook: ttk.Notebook) -> None:
         """Tab 0: split openEO 3-band GeoTIFFs."""
@@ -1426,6 +2156,83 @@ class OpenEO2MintpyApp(tk.Tk):
                         "Preparing the DEM did not complete successfully. See "
                         "the Step 0 log for details.",
                     )
+                elif msg == "__openeo_connect__:ok":
+                    self._openeo_running = False
+                    self.openeo_connect_btn.configure(state="normal")
+                    self.status_var.set("openEO connected.")
+                    messagebox.showinfo(
+                        "Connection Successful",
+                        "openEO & CDSE connection and OIDC authentication successful!"
+                    )
+                elif msg == "__openeo_connect__:error":
+                    self._openeo_running = False
+                    self.openeo_connect_btn.configure(state="normal")
+                    self.status_var.set("Connection failed.")
+                    messagebox.showerror(
+                        "Connection Failed",
+                        "Failed to connect to openEO backend. "
+                        "See the openEO Dispatcher Log for details."
+                    )
+                elif msg == "__openeo_query__:ok":
+                    self._openeo_running = False
+                    self.openeo_query_btn.configure(state="normal")
+                    self.openeo_submit_btn.configure(state="normal")
+                    self.status_var.set("Catalogue query complete.")
+                    messagebox.showinfo(
+                        "Query Complete",
+                        f"Catalogue query complete. Successfully generated InSAR pairs.\n\n"
+                        f"You can now submit the {len(self.query_groups)} job parts "
+                        "using the 'Submit Job Parts' button."
+                    )
+                elif msg == "__openeo_query__:error":
+                    self._openeo_running = False
+                    self.openeo_query_btn.configure(state="normal")
+                    self.status_var.set("Query failed.")
+                    messagebox.showerror(
+                        "Query Failed",
+                        "Catalogue query failed or no suitable pairs were generated. "
+                        "See the openEO Dispatcher Log for details."
+                    )
+                elif msg.startswith("__openeo_submit__:ok:"):
+                    self._openeo_running = False
+                    self.openeo_submit_btn.configure(state="normal")
+                    job_ids = msg.split(":", 2)[2]
+                    self._entries["openeo_job_ids"].set(job_ids)
+                    self.status_var.set("Jobs submitted.")
+                    messagebox.showinfo(
+                        "Submission Complete",
+                        f"Successfully submitted all batch job parts!\n\n"
+                        f"Job ID(s): {job_ids}\n\n"
+                        f"Use 'Query Status' periodically to check their status."
+                    )
+                elif msg == "__openeo_submit__:error":
+                    self._openeo_running = False
+                    self.openeo_submit_btn.configure(state="normal")
+                    self.status_var.set("Submission failed.")
+                    messagebox.showerror(
+                        "Submission Failed",
+                        "Failed to submit InSAR batch jobs. "
+                        "See the openEO Dispatcher Log for details."
+                    )
+                elif msg == "__openeo_status__:done":
+                    self._openeo_running = False
+                    self.openeo_status_btn.configure(state="normal")
+                    self.status_var.set("Status check complete.")
+                elif msg == "__openeo_download__:done":
+                    self._openeo_running = False
+                    self.openeo_download_btn.configure(state="normal")
+                    self.status_var.set("Download complete.")
+
+                    work_dir = self._entries.get("openeo_work_dir", "").get().strip()
+                    if work_dir:
+                        self._entries["openeo_dir"].set(work_dir)
+
+                    messagebox.showinfo(
+                        "Download Complete",
+                        f"Finished downloading job results to:\n{work_dir}\n\n"
+                        "The download directory has been auto-populated in the "
+                        "'0. Split & Align' tab."
+                    )
                 elif (
                     msg.startswith("__progress__:")
                     or msg == "__done__:ok"
@@ -1449,8 +2256,13 @@ class OpenEO2MintpyApp(tk.Tk):
                         )
                 else:
                     # Route standard logging message to appropriate window:
-                    # If split_run_btn is disabled, it is a split message.
-                    if str(self.split_run_btn.cget("state")) == "disabled":
+                    if msg.startswith("[openeo]") or self._openeo_running:
+                        display_msg = msg[8:].lstrip() if msg.startswith("[openeo]") else msg
+                        self._openeo_log(display_msg)
+                    elif (
+                        str(self.split_run_btn.cget("state")) == "disabled"
+                        or str(self.dem_run_btn.cget("state")) == "disabled"
+                    ):
                         self._split_log(msg)
                     else:
                         self._log(msg)

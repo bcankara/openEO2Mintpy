@@ -17,6 +17,22 @@ SETTINGS_FILENAME = "openeo2mintpy_settings.json"
 
 # All recognized setting keys with descriptions
 SETTINGS_KEYS = {
+    "openeo_backend": "openEO backend URL",
+    "openeo_cwl_url": "openEO CWL workflow URL",
+    "openeo_start_date": "openEO query start date (YYYY-MM-DD)",
+    "openeo_end_date": "openEO query end date (YYYY-MM-DD)",
+    "openeo_polarisation": "openEO polarisation (e.g. VV)",
+    "openeo_track": "openEO relative orbit number (track)",
+    "openeo_direction": "openEO pass direction (ASCENDING/DESCENDING)",
+    "openeo_burst_id": "openEO Sentinel-1 burst ID",
+    "openeo_sub_swath": "openEO Sentinel-1 sub swath (IW1/IW2/IW3)",
+    "openeo_bbox_north": "openEO bounding box North (latitude)",
+    "openeo_bbox_south": "openEO bounding box South (latitude)",
+    "openeo_bbox_east": "openEO bounding box East (longitude)",
+    "openeo_bbox_west": "openEO bounding box West (longitude)",
+    "openeo_max_baseline_days": "openEO maximum baseline in days",
+    "openeo_work_dir": "openEO downloaded data working directory",
+    "openeo_job_ids": "openEO submitted Job IDs",
     "openeo_dir": "openEO raw TIFFs directory",
     "unw_out_dir": "Output directory for split unwrapped phase (*.unw.tif)",
     "cor_out_dir": "Output directory for split coherence (*.cor.tif)",
