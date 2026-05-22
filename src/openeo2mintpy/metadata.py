@@ -457,40 +457,42 @@ def extract_dates_from_filename(filename):
     return None
 
 
-def auto_detect_ref_date(baseline_dir):
-    """Auto-detect the reference (super-master) date from baseline directory.
+def auto_detect_ref_date(directory):
+    """Auto-detect the reference (super-master) date from a directory.
 
-    The reference date is the one that appears most frequently as the
-    first element of YYYYMMDD_YYYYMMDD folder names.
+    Scans the given directory for sub-folders or files containing the
+    YYYYMMDD_YYYYMMDD date pair pattern. The reference date is the one
+    that appears most frequently as the first date in those pairs.
 
     Parameters
     ----------
-    baseline_dir : str or Path
-        Path to the ISCE2 baselines directory.
+    directory : str or Path
+        Path to the directory to scan (e.g. unwrapped or baseline dir).
 
     Returns
     -------
     str or None
         The detected reference date, or None if detection fails.
     """
-    baseline_dir = Path(baseline_dir)
-    if not baseline_dir.exists():
+    directory = Path(directory)
+    if not directory.exists():
         return None
 
     date_counts = {}
-    for folder in baseline_dir.iterdir():
-        if not folder.is_dir():
-            continue
-        parts = folder.name.split("_")
-        if len(parts) == 2 and len(parts[0]) == 8 and parts[0].isdigit():
-            date_counts[parts[0]] = date_counts.get(parts[0], 0) + 1
+    for path in directory.iterdir():
+        name = path.name
+        # Match YYYYMMDD_YYYYMMDD pattern in folder or file name
+        m = DATE_PAIR_PATTERN.search(name)
+        if m:
+            d1 = m.group(1)
+            date_counts[d1] = date_counts.get(d1, 0) + 1
 
     if not date_counts:
         return None
 
     # The reference date appears in most pairs
     ref_date = max(date_counts, key=date_counts.get)
-    logger.info("Auto-detected reference date: %s (%d pairs)", ref_date, date_counts[ref_date])
+    logger.info("Auto-detected reference date: %s (%d occurrences)", ref_date, date_counts[ref_date])
     return ref_date
 
 

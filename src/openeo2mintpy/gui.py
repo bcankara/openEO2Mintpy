@@ -72,31 +72,6 @@ FIELDS = [
         ),
     },
     {
-        "key": "baseline_dir",
-        "label": "Baseline directory",
-        "kind": "dir",
-        "required": False,
-        "help": (
-            "ISCE2 baseline directory containing YYYYMMDD_YYYYMMDD/ "
-            "sub-folders with baseline text files.\n\n"
-            "Used to compute perpendicular baseline (Bperp). Optional: if "
-            "omitted, Bperp is set to 0 for every pair."
-        ),
-    },
-    {
-        "key": "ref_xml",
-        "label": "Reference XML",
-        "kind": "file",
-        "required": False,
-        "help": (
-            "ISCE2 reference product XML, e.g. reference/IW1.xml or "
-            "reference/IW2.xml.\n\n"
-            "Used to extract radar metadata (wavelength, heading, "
-            "incidence angle). If omitted, default Sentinel-1 values are "
-            "used as a fallback."
-        ),
-    },
-    {
         "key": "ref_date",
         "label": "Reference date",
         "kind": "text",
@@ -104,22 +79,8 @@ FIELDS = [
         "help": (
             "Reference (super-master) acquisition date in YYYYMMDD format, "
             "e.g. 20240919.\n\n"
-            "Use the 'Auto-detect' button to infer it from the baseline "
+            "Use the 'Auto-detect' button to infer it from the unwrapped "
             "directory."
-        ),
-    },
-    {
-        "key": "geometry_dir",
-        "label": "Geometry directory",
-        "kind": "dir",
-        "required": False,
-        "help": (
-            "Directory containing DEM, incidence angle and azimuth angle "
-            "rasters.\n\n"
-            "Optional helper: when set, the DEM / incidence / azimuth / "
-            "lookup file fields below are auto-populated from this folder "
-            "if matching files (hgt.rdr.full, los.rdr.full, lat.rdr.full, "
-            "lon.rdr.full) exist."
         ),
     },
     {
@@ -153,29 +114,6 @@ FIELDS = [
             "Path to the azimuth angle raster — typically the same "
             "los.rdr.full file used for the incidence angle.\n\n"
             "Written to mintpy.load.azAngleFile."
-        ),
-    },
-    {
-        "key": "lookup_y_file",
-        "label": "Lookup Y (latitude) file",
-        "kind": "file",
-        "required": False,
-        "help": (
-            "Latitude lookup table — typically ISCE2 lat.rdr.full.\n\n"
-            "Required when the stack is in radar geometry so MintPy can "
-            "geocode results. Written to mintpy.load.lookupYFile.\n"
-            "Skipping this leads to 'No lookup table found' errors."
-        ),
-    },
-    {
-        "key": "lookup_x_file",
-        "label": "Lookup X (longitude) file",
-        "kind": "file",
-        "required": False,
-        "help": (
-            "Longitude lookup table — typically ISCE2 lon.rdr.full.\n\n"
-            "Required when the stack is in radar geometry so MintPy can "
-            "geocode results. Written to mintpy.load.lookupXFile."
         ),
     },
     {
@@ -246,8 +184,6 @@ GEOMETRY_AUTOFILL = {
     "dem_file": ("hgt.rdr.full", "hgt.rdr", "*dem*.rdr.full", "*dem*.tif", "*height*.rdr.full"),
     "inc_angle_file": ("los.rdr.full", "los.rdr", "*inc*.rdr.full", "*incidence*.tif"),
     "az_angle_file": ("los.rdr.full", "los.rdr", "*az*.rdr.full", "*azimuth*.tif"),
-    "lookup_y_file": ("lat.rdr.full", "lat.rdr", "lat.tif"),
-    "lookup_x_file": ("lon.rdr.full", "lon.rdr", "lon.tif"),
     "water_mask_file": ("waterMask.rdr.full", "water_mask.tif", "*water*.tif"),
 }
 
@@ -963,7 +899,7 @@ class OpenEO2MintpyApp(tk.Tk):
             warn_frame,
             text=(
                 "This tab rewrites the PROCESSOR attribute inside\n"
-                "    inputs/ifgramStack.h5  and  inputs/geometryRadar.h5\n"
+                "    inputs/ifgramStack.h5  and  inputs/geometryGeo.h5\n"
                 "from 'hyp3' to 'isce'. Those HDF5 files only exist AFTER you run:\n"
                 "    smallbaselineApp.py mintpy_config.txt --dostep load_data\n\n"
                 "Fixes the runtime error:\n"
@@ -1013,7 +949,7 @@ class OpenEO2MintpyApp(tk.Tk):
         Tooltip(
             help1,
             "The 'inputs/' folder inside your MintPy working directory. "
-            "It must already contain ifgramStack.h5 and geometryRadar.h5 "
+            "It must already contain ifgramStack.h5 and geometryGeo.h5 "
             "produced by 'smallbaselineApp.py --dostep load_data'.",
         )
 
@@ -1041,7 +977,7 @@ class OpenEO2MintpyApp(tk.Tk):
         ttk.Label(form, text="Target files (comma separated)").grid(
             row=3, column=0, sticky="w", padx=(0, 8), pady=4
         )
-        targets_var = tk.StringVar(value="ifgramStack.h5, geometryRadar.h5")
+        targets_var = tk.StringVar(value="ifgramStack.h5, geometryGeo.h5")
         self._post_entries["target_files"] = targets_var
         ttk.Entry(form, textvariable=targets_var).grid(
             row=3, column=1, sticky="ew", pady=4
@@ -1143,8 +1079,8 @@ class OpenEO2MintpyApp(tk.Tk):
             auto.pack(side="left")
             Tooltip(
                 auto,
-                "Try to infer the reference date from the baseline directory "
-                "by looking at which date is common to every sub-folder name.",
+                "Try to infer the reference date from the unwrapped directory "
+                "by looking at the interferogram file names.",
             )
 
         help_icon = ttk.Label(
@@ -1221,7 +1157,7 @@ class OpenEO2MintpyApp(tk.Tk):
         )
         if path:
             self._entries[key].set(path)
-            if key == "geometry_dir":
+            if key == "unw_dir":
                 self._autofill_geometry_files(path)
 
     def _autofill_geometry_files(self, geometry_dir: str) -> None:
@@ -1273,14 +1209,14 @@ class OpenEO2MintpyApp(tk.Tk):
             self._entries[key].set(path)
 
     def _auto_detect_ref_date(self) -> None:
-        baseline = self._entries["baseline_dir"].get().strip()
-        if not baseline:
+        unw = self._entries["unw_dir"].get().strip()
+        if not unw:
             messagebox.showinfo(
                 "Auto-detect reference date",
-                "Please select a baseline directory first.",
+                "Please select an unwrapped directory first.",
             )
             return
-        detected = auto_detect_ref_date(baseline)
+        detected = auto_detect_ref_date(unw)
         if detected:
             self._entries["ref_date"].set(detected)
             self._log(f"Auto-detected reference date: {detected}")
@@ -1288,7 +1224,7 @@ class OpenEO2MintpyApp(tk.Tk):
         else:
             messagebox.showwarning(
                 "Auto-detect reference date",
-                "Could not determine a reference date from the baseline directory.",
+                "Could not determine a reference date from the unwrapped directory.",
             )
 
     # ------------------------------------------------------------------
@@ -1303,21 +1239,15 @@ class OpenEO2MintpyApp(tk.Tk):
         elif not Path(unw).is_dir():
             errors.append(f"Unwrapped directory does not exist: {unw}")
 
-        for key in ("cor_dir", "baseline_dir", "geometry_dir"):
+        for key in ("cor_dir",):
             value = settings.get(key)
             if value and not Path(value).is_dir():
                 errors.append(f"{key} does not exist: {value}")
-
-        ref_xml = settings.get("ref_xml")
-        if ref_xml and not Path(ref_xml).is_file():
-            errors.append(f"Reference XML file does not exist: {ref_xml}")
 
         for file_key in (
             "dem_file",
             "inc_angle_file",
             "az_angle_file",
-            "lookup_y_file",
-            "lookup_x_file",
             "water_mask_file",
         ):
             value = settings.get(file_key)
@@ -1388,9 +1318,9 @@ class OpenEO2MintpyApp(tk.Tk):
                 unw_dir=settings["unw_dir"],
                 cor_dir=settings.get("cor_dir"),
                 conncomp_dir=settings["unw_dir"],
-                geometry_dir=settings.get("geometry_dir"),
-                baseline_dir=settings.get("baseline_dir"),
-                ref_xml=settings.get("ref_xml"),
+                geometry_dir=None,
+                baseline_dir=None,
+                ref_xml=None,
                 ref_date=settings.get("ref_date"),
                 progress_callback=progress_cb,
                 geometry_mode=settings.get("geometry_mode") or "auto",
@@ -1415,18 +1345,12 @@ class OpenEO2MintpyApp(tk.Tk):
                 dem_file=settings.get("dem_file"),
                 inc_angle_file=settings.get("inc_angle_file"),
                 az_angle_file=settings.get("az_angle_file"),
-                lookup_y_file=settings.get("lookup_y_file"),
-                lookup_x_file=settings.get("lookup_x_file"),
+                lookup_y_file=None,
+                lookup_x_file=None,
                 water_mask_file=settings.get("water_mask_file"),
                 processor=settings.get("mintpy_processor") or "isce",
             )
             self._log_queue.put(f"MintPy config written: {config_path}")
-            for key in ("lookup_y_file", "lookup_x_file"):
-                if not settings.get(key):
-                    self._log_queue.put(
-                        f"  WARNING: {key} not set -- MintPy may fail with "
-                        "'No lookup table found' during geocoding."
-                    )
             self._log_queue.put("__done__:ok")
         except Exception as exc:
             logger.exception("GUI run failed")
@@ -1560,7 +1484,7 @@ class OpenEO2MintpyApp(tk.Tk):
         raw_targets = self._post_entries["target_files"].get().strip()
         targets = tuple(
             t.strip() for t in raw_targets.split(",") if t.strip()
-        ) or ("ifgramStack.h5", "geometryRadar.h5")
+        ) or ("ifgramStack.h5", "geometryGeo.h5")
         return {
             "inputs_dir": self._post_entries["inputs_dir"].get().strip(),
             "old_processor": self._post_entries["old_processor"].get().strip() or "hyp3",
