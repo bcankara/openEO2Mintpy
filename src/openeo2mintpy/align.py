@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -186,7 +187,6 @@ def align_rasters(
                 # Use shutil.copy2 + unlink instead of os.replace because
                 # the temp dir may be on a different filesystem (e.g. /tmp
                 # vs /mnt/w on WSL), and os.replace fails across mount points.
-                import shutil
                 if fpath.exists():
                     fpath.unlink()
                 shutil.copy2(str(temp_out), str(fpath))
