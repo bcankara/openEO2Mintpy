@@ -2284,6 +2284,26 @@ class OpenEO2MintpyApp(tk.Tk):
                     if msg.startswith("[openeo]") or self._openeo_running:
                         display_msg = msg[8:].lstrip() if msg.startswith("[openeo]") else msg
                         self._openeo_log(display_msg)
+
+                        # Check for OIDC Device Flow instructions to show popup
+                        if "Visit " in display_msg and "authenticate" in display_msg:
+                            url = ""
+                            code = ""
+                            try:
+                                if "and enter user code" in display_msg:
+                                    parts = display_msg.split("Visit ")
+                                    url_part = parts[1].split(" and enter")[0].strip()
+                                    code_parts = display_msg.split("user code '")
+                                    code_part = code_parts[1].split("' to authenticate")[0].strip()
+                                    url = url_part
+                                    code = code_part
+                                else:
+                                    parts = display_msg.split("Visit ")
+                                    url = parts[1].split(" to authenticate")[0].strip()
+                            except Exception:
+                                pass
+                            if url:
+                                self._show_device_code_popup(url, code)
                     elif (
                         str(self.split_run_btn.cget("state")) == "disabled"
                         or str(self.dem_run_btn.cget("state")) == "disabled"
@@ -2301,6 +2321,142 @@ class OpenEO2MintpyApp(tk.Tk):
         self.log.insert("end", message + "\n")
         self.log.see("end")
         self.log.configure(state="disabled")
+
+    def _show_device_code_popup(self, url: str, code: str) -> None:
+        """Display a modal dialog with copyable CDSE URL and user code."""
+        popup = tk.Toplevel(self)
+        popup.title("openEO CDSE Authentication")
+        popup.geometry("540x350")
+        popup.resizable(False, False)
+        popup.transient(self)
+        popup.grab_set()  # Make it modal
+
+        # Center the popup relative to self (parent)
+        popup.update_idletasks()
+        parent_x = self.winfo_x()
+        parent_y = self.winfo_y()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        w = 540
+        h = 350
+        x = parent_x + (parent_w - w) // 2
+        y = parent_y + (parent_h - h) // 2
+        popup.geometry(f"{w}x{h}+{x}+{y}")
+
+        # Styles/Colors
+        bg_color = "#f8f9fa"
+        popup.configure(bg=bg_color)
+
+        main_frame = ttk.Frame(popup, padding=20)
+        main_frame.pack(fill="both", expand=True)
+
+        # Header
+        ttk.Label(
+            main_frame,
+            text="Authentication Required (Device Flow)",
+            font=("TkDefaultFont", 12, "bold"),
+            foreground="#1565c0",
+        ).pack(anchor="w", pady=(0, 10))
+
+        desc = (
+            "A headless or WSL environment has been detected.\n"
+            "Please follow the steps below to authenticate with Copernicus CDSE:"
+        )
+        ttk.Label(main_frame, text=desc, font=("TkDefaultFont", 10)).pack(anchor="w", pady=(0, 15))
+
+        # Step 1: URL
+        ttk.Label(
+            main_frame,
+            text="1. Copy and open this URL in your browser:",
+            font=("TkDefaultFont", 9, "bold"),
+        ).pack(anchor="w")
+
+        url_frame = ttk.Frame(main_frame)
+        url_frame.pack(fill="x", pady=(2, 10))
+
+        url_var = tk.StringVar(value=url)
+        url_entry = ttk.Entry(
+            url_frame,
+            textvariable=url_var,
+            state="readonly",
+            font=("TkDefaultFont", 9),
+        )
+        url_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        def copy_url():
+            self.clipboard_clear()
+            self.clipboard_append(url)
+            messagebox.showinfo(
+                "Copied",
+                "Authentication URL copied to clipboard!",
+                parent=popup,
+            )
+
+        def open_url():
+            import webbrowser
+            webbrowser.open(url)
+
+        copy_url_btn = ttk.Button(url_frame, text="Copy Link", width=10, command=copy_url)
+        copy_url_btn.pack(side="left", padx=(0, 5))
+
+        open_url_btn = ttk.Button(url_frame, text="Open", width=8, command=open_url)
+        open_url_btn.pack(side="left")
+
+        # Step 2: Code (if present)
+        if code:
+            ttk.Label(
+                main_frame,
+                text="2. Enter this user code on the activation page:",
+                font=("TkDefaultFont", 9, "bold"),
+            ).pack(anchor="w")
+
+            code_frame = ttk.Frame(main_frame)
+            code_frame.pack(fill="x", pady=(2, 15))
+
+            code_var = tk.StringVar(value=code)
+            code_entry = ttk.Entry(
+                code_frame,
+                textvariable=code_var,
+                state="readonly",
+                font=("Courier New", 12, "bold"),
+                justify="center",
+            )
+            code_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+            def copy_code():
+                self.clipboard_clear()
+                self.clipboard_append(code)
+                messagebox.showinfo(
+                    "Copied",
+                    "User code copied to clipboard!",
+                    parent=popup,
+                )
+
+            copy_code_btn = ttk.Button(code_frame, text="Copy Code", width=10, command=copy_code)
+            copy_code_btn.pack(side="left")
+        else:
+            # Spacer if no code
+            ttk.Frame(main_frame, height=45).pack()
+
+        # Footer explanation
+        footer_text = (
+            "Note: The application will automatically detect when you have authorized\n"
+            "in your browser and complete the connection process. You may close "
+            "this window afterwards."
+        )
+        ttk.Label(
+            main_frame,
+            text=footer_text,
+            font=("TkDefaultFont", 8, "italic"),
+            foreground="#666666",
+        ).pack(anchor="w", pady=(0, 15))
+
+        # Close button
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(fill="x")
+
+        close_btn = ttk.Button(btn_frame, text="Close Dialog", command=popup.destroy)
+        close_btn.pack(side="right")
 
     # ------------------------------------------------------------------
     # Post-load fix tab
