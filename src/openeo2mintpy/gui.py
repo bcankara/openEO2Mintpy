@@ -405,21 +405,21 @@ class OpenEO2MintpyApp(tk.Tk):
     def _build_split_tab(self, notebook: ttk.Notebook) -> None:
         """Tab 0: split openEO 3-band GeoTIFFs."""
         tab = ttk.Frame(notebook, padding=10)
-        notebook.add(tab, text="0. Split openEO Bands")
+        notebook.add(tab, text="0. Split & Align")
 
         banner = ttk.Frame(tab)
         banner.pack(fill="x", pady=(0, 8))
         ttk.Label(
             banner,
-            text="Step 0 - Split openEO 3-band GeoTIFFs",
+            text="Step 0 - Split & Align openEO GeoTIFFs",
             style="SubHeading.TLabel",
         ).pack(anchor="w")
         ttk.Label(
             banner,
             text=(
-                "Extracts Band 2 (Unwrapped Phase) and Band 3 (Coherence) from openEO GeoTIFFs. "
-                "Output files are renamed to 'YYYYMMDD_YYYYMMDD.unw.tif' "
-                "and 'YYYYMMDD_YYYYMMDD.cor.tif' to match MintPy expectations."
+                "Extracts Band 2 (Unwrapped Phase) and Band 3 (Coherence) from openEO GeoTIFFs, "
+                "then aligns all rasters to a common grid (intersection bounding box). "
+                "Output files follow 'YYYYMMDD_YYYYMMDD.unw.tif' / '.cor.tif' naming."
             ),
             style="Hint.TLabel",
             wraplength=760,
@@ -512,10 +512,10 @@ class OpenEO2MintpyApp(tk.Tk):
         )
 
         self.split_run_btn = ttk.Button(
-            action_bar, text="Split Bands", command=self._run_split_clicked
+            action_bar, text="Split & Align", command=self._run_split_clicked
         )
         self.split_run_btn.pack(side="right")
-        Tooltip(self.split_run_btn, "Start extraction of Band 2 and Band 3 from openEO files.")
+        Tooltip(self.split_run_btn, "Split openEO bands and align all rasters to a common grid.")
 
         split_quit_btn = ttk.Button(action_bar, text="Quit", command=self.destroy)
         split_quit_btn.pack(side="right", padx=(0, 6))
@@ -681,9 +681,9 @@ class OpenEO2MintpyApp(tk.Tk):
 
         self.split_run_btn.configure(state="disabled")
         self.split_progress.configure(value=0)
-        self.status_var.set("Splitting openEO bands...")
+        self.status_var.set("Splitting & aligning...")
         self._split_log_clear()
-        self._split_log("Starting openEO band splitting...")
+        self._split_log("Starting split & align pipeline...")
 
         self._worker = threading.Thread(
             target=self._run_split_worker,

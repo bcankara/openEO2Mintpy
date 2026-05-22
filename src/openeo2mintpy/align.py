@@ -182,12 +182,14 @@ def align_rasters(
                 # Perform the warp to a temporary file
                 gdal.Warp(str(temp_out), str(fpath), options=warp_options)
 
-                # Replace the original file with the warped one
+                # Replace the original file with the warped one.
+                # Use shutil.copy2 + unlink instead of os.replace because
+                # the temp dir may be on a different filesystem (e.g. /tmp
+                # vs /mnt/w on WSL), and os.replace fails across mount points.
+                import shutil
                 if fpath.exists():
                     fpath.unlink()
-
-                # Copy from temp back to original
-                os.replace(str(temp_out), str(fpath))
+                shutil.copy2(str(temp_out), str(fpath))
 
                 result["aligned"] += 1
                 result["details"].append({"file": fpath.name, "status": "aligned"})
