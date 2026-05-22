@@ -271,6 +271,7 @@ def test_download_job_results(tmp_path):
 
 
 def test_extract_unique_bursts():
+    coords = [[[34.0, 40.0], [35.0, 40.0], [35.0, 41.0], [34.0, 41.0], [34.0, 40.0]]]
     bursts = [
         {
             "RelativeOrbitNumber": 14,
@@ -278,7 +279,7 @@ def test_extract_unique_bursts():
             "SwathIdentifier": "IW1",
             "BurstId": 30,
             "PlatformSerialIdentifier": "A",
-            "GeoFootprint": {"type": "Polygon", "coordinates": [[[34.0, 40.0], [35.0, 40.0], [35.0, 41.0], [34.0, 41.0], [34.0, 40.0]]]},
+            "GeoFootprint": {"type": "Polygon", "coordinates": coords},
         },
         {
             "RelativeOrbitNumber": 14,
@@ -311,7 +312,7 @@ def test_extract_unique_bursts():
         "swath": "IW1",
         "burst_id": 30,
         "count": 2,
-        "geofootprint": {"type": "Polygon", "coordinates": [[[34.0, 40.0], [35.0, 40.0], [35.0, 41.0], [34.0, 41.0], [34.0, 40.0]]]},
+        "geofootprint": {"type": "Polygon", "coordinates": coords},
     }
     assert results[1] == {
         "track": 15,
