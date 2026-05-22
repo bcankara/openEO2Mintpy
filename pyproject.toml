@@ -38,6 +38,8 @@ classifiers = [
 dependencies = [
     "numpy",
     "h5py",
+    "openeo",
+    "tkintermapview",
 ]
 
 [project.optional-dependencies]
