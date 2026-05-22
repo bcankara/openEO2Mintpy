@@ -88,9 +88,18 @@ def verify_inputs_dir(
     """
     h5py = _require_h5py()
     inputs_dir = Path(inputs_dir)
+
+    actual_targets = list(target_files)
+    if tuple(target_files) == DEFAULT_TARGET_FILES:
+        if (
+            (inputs_dir / "geometryGeo.h5").is_file()
+            and not (inputs_dir / "geometryRadar.h5").is_file()
+        ):
+            actual_targets = ["ifgramStack.h5", "geometryGeo.h5"]
+
     report = []
 
-    for fname in target_files:
+    for fname in actual_targets:
         path = inputs_dir / fname
         entry = {
             "path": path,
@@ -182,8 +191,16 @@ def fix_processor_attribute(
             f"inputs directory does not exist: {inputs_dir}"
         )
 
+    actual_targets = list(target_files)
+    if tuple(target_files) == DEFAULT_TARGET_FILES:
+        if (
+            (inputs_dir / "geometryGeo.h5").is_file()
+            and not (inputs_dir / "geometryRadar.h5").is_file()
+        ):
+            actual_targets = ["ifgramStack.h5", "geometryGeo.h5"]
+
     if require_lookup_datasets:
-        _abort_if_lookup_missing(inputs_dir, target_files)
+        _abort_if_lookup_missing(inputs_dir, actual_targets)
 
     summary = {
         "patched": 0,
@@ -193,7 +210,7 @@ def fix_processor_attribute(
         "dry_run": dry_run,
     }
 
-    for fname in target_files:
+    for fname in actual_targets:
         path = inputs_dir / fname
         record = {"file": fname, "path": str(path), "action": None}
 
