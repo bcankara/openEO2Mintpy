@@ -556,7 +556,8 @@ class OpenEO2MintpyApp(tk.Tk):
             self.openeo_find_bursts_btn,
             "Query CDSE catalogue to find all available Sentinel-1 Track / Burst ID / Swath\n"
             "combinations within the current bounding box and date range.\n"
-            "Select a row from the results to auto-populate Track, Burst ID, Direction, and Sub-Swath.",
+            "Select a row from the results to auto-populate Track, Burst ID, Direction,\n"
+            "and Sub-Swath.",
         )
 
         self.openeo_query_btn = ttk.Button(
@@ -2449,12 +2450,18 @@ class OpenEO2MintpyApp(tk.Tk):
                     self._openeo_running = False
                     self.openeo_find_bursts_btn.configure(state="normal")
                     self.status_var.set("No bursts found.")
-                    messagebox.showinfo("No Results", "No Sentinel-1 bursts found within the selected ROI and dates.")
+                    messagebox.showinfo(
+                        "No Results",
+                        "No Sentinel-1 bursts found within the selected ROI and dates.",
+                    )
                 elif msg == "__openeo_find_bursts__:error":
                     self._openeo_running = False
                     self.openeo_find_bursts_btn.configure(state="normal")
                     self.status_var.set("Burst search failed.")
-                    messagebox.showerror("Error", "Failed to query bursts from CDSE catalogue. See log for details.")
+                    messagebox.showerror(
+                        "Error",
+                        "Failed to query bursts from CDSE catalogue. See log for details.",
+                    )
                 elif (
                     msg.startswith("__progress__:")
                     or msg == "__done__:ok"
@@ -2686,7 +2693,10 @@ class OpenEO2MintpyApp(tk.Tk):
 
         ttk.Label(
             main_frame,
-            text="Select a row and click 'Select Burst' (or double-click) to populate Track and Burst ID details:",
+            text=(
+                "Select a row and click 'Select Burst' (or double-click) "
+                "to populate Track and Burst ID details:"
+            ),
             font=("TkDefaultFont", 9),
         ).pack(anchor="w", pady=(0, 10))
 
@@ -2733,20 +2743,23 @@ class OpenEO2MintpyApp(tk.Tk):
         def on_select():
             selected = tree.selection()
             if not selected:
-                messagebox.showwarning("Selection Required", "Please select a burst from the list.", parent=popup)
+                messagebox.showwarning(
+                    "Selection Required", "Please select a burst from the list.", parent=popup
+                )
                 return
             item = tree.item(selected[0])
             val = item["values"]
-            
+
             # Populate entry boxes
             self._entries["openeo_track"].set(str(val[0]))
             self._entries["openeo_direction"].set(str(val[1]))
             self._entries["openeo_sub_swath"].set(str(val[2]))
             self._entries["openeo_burst_id"].set(str(val[3]))
-            
+
             # Log selection
             self._openeo_log(
-                f"Selected Burst from Catalog: Track {val[0]} ({val[1]}), Swath {val[2]}, Burst ID {val[3]}"
+                f"Selected Burst from Catalog: Track {val[0]} ({val[1]}), "
+                f"Swath {val[2]}, Burst ID {val[3]}"
             )
             popup.destroy()
 

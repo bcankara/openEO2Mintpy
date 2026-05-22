@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 import openeo
 from openeo.internal.graph_building import PGNode
@@ -58,7 +58,7 @@ def is_headless_or_wsl() -> bool:
 
 def connect_and_auth(
     url: str = DEFAULT_BACKEND,
-    display: Optional[Callable] = None,
+    display: Callable | None = None,
 ) -> openeo.Connection:
     """Connect to openEO backend and authenticate via OIDC.
 
