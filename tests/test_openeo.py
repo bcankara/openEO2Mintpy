@@ -278,6 +278,7 @@ def test_extract_unique_bursts():
             "SwathIdentifier": "IW1",
             "BurstId": 30,
             "PlatformSerialIdentifier": "A",
+            "GeoFootprint": {"type": "Polygon", "coordinates": [[[34.0, 40.0], [35.0, 40.0], [35.0, 41.0], [34.0, 41.0], [34.0, 40.0]]]},
         },
         {
             "RelativeOrbitNumber": 14,
@@ -310,6 +311,7 @@ def test_extract_unique_bursts():
         "swath": "IW1",
         "burst_id": 30,
         "count": 2,
+        "geofootprint": {"type": "Polygon", "coordinates": [[[34.0, 40.0], [35.0, 40.0], [35.0, 41.0], [34.0, 41.0], [34.0, 40.0]]]},
     }
     assert results[1] == {
         "track": 15,
@@ -317,4 +319,5 @@ def test_extract_unique_bursts():
         "swath": "IW2",
         "burst_id": 45,
         "count": 1,
+        "geofootprint": None,
     }
