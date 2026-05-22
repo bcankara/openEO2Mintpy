@@ -2571,13 +2571,12 @@ class OpenEO2MintpyApp(tk.Tk):
         url_frame = ttk.Frame(main_frame)
         url_frame.pack(fill="x", pady=(2, 10))
 
-        url_var = tk.StringVar(value=url)
         url_entry = ttk.Entry(
             url_frame,
-            textvariable=url_var,
-            state="readonly",
             font=("TkDefaultFont", 9),
         )
+        url_entry.insert(0, url)
+        url_entry.configure(state="readonly")
         url_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
         def copy_url():
@@ -2610,14 +2609,13 @@ class OpenEO2MintpyApp(tk.Tk):
             code_frame = ttk.Frame(main_frame)
             code_frame.pack(fill="x", pady=(2, 15))
 
-            code_var = tk.StringVar(value=code)
             code_entry = ttk.Entry(
                 code_frame,
-                textvariable=code_var,
-                state="readonly",
                 font=("Courier New", 12, "bold"),
                 justify="center",
             )
+            code_entry.insert(0, code)
+            code_entry.configure(state="readonly")
             code_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
             def copy_code():
