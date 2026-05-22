@@ -311,6 +311,10 @@ class OpenEO2MintpyApp(tk.Tk):
         self._openeo_running = False
         self._split_running = False
         self.openeo_connection = None
+        self._device_code_popup = None
+        self._auth_status_label = None
+        self._auth_close_btn = None
+        self._auth_is_success = False
         self.next_click_corner = "NW"
         self.map_polygon = None
         self.query_groups = None
@@ -2368,6 +2372,7 @@ class OpenEO2MintpyApp(tk.Tk):
                     self._openeo_running = False
                     self.openeo_connect_btn.configure(state="normal")
                     self.status_var.set("openEO connected.")
+                    self._update_auth_popup_success()
                     messagebox.showinfo(
                         "Connection Successful",
                         "openEO & CDSE connection and OIDC authentication successful!"
@@ -2595,15 +2600,8 @@ class OpenEO2MintpyApp(tk.Tk):
                 parent=popup,
             )
 
-        def open_url():
-            import webbrowser
-            webbrowser.open(url)
-
-        copy_url_btn = ttk.Button(url_frame, text="Copy Link", width=10, command=copy_url)
-        copy_url_btn.pack(side="left", padx=(0, 5))
-
-        open_url_btn = ttk.Button(url_frame, text="Open", width=8, command=open_url)
-        open_url_btn.pack(side="left")
+        copy_url_btn = ttk.Button(url_frame, text="Copy Link", width=12, command=copy_url)
+        copy_url_btn.pack(side="left")
 
         # Step 2: Code (if present)
         if code:
@@ -2634,31 +2632,142 @@ class OpenEO2MintpyApp(tk.Tk):
                     parent=popup,
                 )
 
-            copy_code_btn = ttk.Button(code_frame, text="Copy Code", width=10, command=copy_code)
+            copy_code_btn = ttk.Button(code_frame, text="Copy Code", width=12, command=copy_code)
             copy_code_btn.pack(side="left")
-        else:
-            # Spacer if no code
-            ttk.Frame(main_frame, height=45).pack()
 
-        # Footer explanation
-        footer_text = (
-            "Note: The application will automatically detect when you have authorized\n"
-            "in your browser and complete the connection process. You may close "
-            "this window afterwards."
-        )
-        ttk.Label(
+        # Status Label
+        self._auth_status_label = ttk.Label(
             main_frame,
-            text=footer_text,
-            font=("TkDefaultFont", 8, "italic"),
-            foreground="#666666",
-        ).pack(anchor="w", pady=(0, 15))
+            text="Status: Waiting for browser authorization (auto-checking)...",
+            font=("TkDefaultFont", 10, "bold"),
+            foreground="#e65100",  # Orange waiting color
+        )
+        self._auth_status_label.pack(anchor="w", pady=(10, 15))
 
-        # Close button
+        # Store references and initialize state
+        self._device_code_popup = popup
+        self._auth_is_success = False
+
+        def on_close():
+            self._cleanup_auth_popup()
+            popup.destroy()
+
+        popup.protocol("WM_DELETE_WINDOW", on_close)
+
+        # Bottom Button Frame
         btn_frame = ttk.Frame(main_frame)
-        btn_frame.pack(fill="x")
+        btn_frame.pack(fill="x", side="bottom")
 
-        close_btn = ttk.Button(btn_frame, text="Close Dialog", command=popup.destroy)
-        close_btn.pack(side="right")
+        self._auth_close_btn = ttk.Button(btn_frame, text="Close Dialog", command=on_close)
+        self._auth_close_btn.pack(side="right")
+
+        def animate_dots(counter=0):
+            if (
+                hasattr(self, "_device_code_popup")
+                and self._device_code_popup is not None
+                and hasattr(self, "_auth_status_label")
+                and self._auth_status_label is not None
+                and not getattr(self, "_auth_is_success", False)
+            ):
+                try:
+                    if (
+                        self._device_code_popup.winfo_exists()
+                        and self._auth_status_label.winfo_exists()
+                    ):
+                        dots = "." * ((counter % 3) + 1)
+                        msg_text = (
+                            f"Status: Waiting for browser authorization "
+                            f"(auto-checking status every 5s){dots}"
+                        )
+                        self._auth_status_label.configure(text=msg_text)
+                        self._device_code_popup.after(1000, lambda: animate_dots(counter + 1))
+                except Exception:
+                    pass
+
+        animate_dots()
+
+    def _cleanup_auth_popup(self) -> None:
+        """Clear references to OIDC popup widgets to avoid memory leaks/errors."""
+        self._device_code_popup = None
+        self._auth_status_label = None
+        self._auth_close_btn = None
+
+    def _update_auth_popup_success(self) -> None:
+        """Update the active OIDC authentication popup to show success status."""
+        self._auth_is_success = True
+        if hasattr(self, "_device_code_popup") and self._device_code_popup is not None:
+            try:
+                if self._device_code_popup.winfo_exists():
+                    # Clear the popup content and show a beautiful success message
+                    for widget in self._device_code_popup.winfo_children():
+                        widget.destroy()
+
+                    success_frame = ttk.Frame(self._device_code_popup, padding=25)
+                    success_frame.pack(fill="both", expand=True)
+
+                    # Large checkmark
+                    check_label = ttk.Label(
+                        success_frame,
+                        text="✔",
+                        font=("TkDefaultFont", 48, "bold"),
+                        foreground="#2e7d32",
+                        anchor="center",
+                    )
+                    check_label.pack(pady=(20, 10))
+
+                    # Success titles
+                    ttk.Label(
+                        success_frame,
+                        text="KİMLİK DOĞRULAMA BAŞARILI!",
+                        font=("TkDefaultFont", 12, "bold"),
+                        foreground="#2e7d32",
+                        anchor="center",
+                    ).pack(pady=(0, 2))
+
+                    ttk.Label(
+                        success_frame,
+                        text="AUTHENTICATION SUCCESSFUL!",
+                        font=("TkDefaultFont", 11, "bold"),
+                        foreground="#1b5e20",
+                        anchor="center",
+                    ).pack(pady=(0, 15))
+
+                    # Warning/explanation messages
+                    msg_tr = (
+                        "openEO & CDSE bağlantısı kuruldu.\n"
+                        "Bu pencereyi güvenle kapatabilirsiniz."
+                    )
+                    ttk.Label(
+                        success_frame,
+                        text=msg_tr,
+                        font=("TkDefaultFont", 10, "bold"),
+                        justify="center",
+                        anchor="center",
+                    ).pack(pady=(0, 10))
+
+                    # Big, focused Close button
+                    def on_close():
+                        self._cleanup_auth_popup()
+                        if (
+                            hasattr(self, "_device_code_popup")
+                            and self._device_code_popup is not None
+                        ):
+                            try:
+                                self._device_code_popup.destroy()
+                            except Exception:
+                                pass
+                            self._device_code_popup = None
+
+                    close_btn = ttk.Button(
+                        success_frame,
+                        text="Kapat / Close",
+                        command=on_close,
+                        width=20,
+                    )
+                    close_btn.pack(pady=10)
+                    close_btn.focus_set()
+            except Exception as e:
+                logger.error("Failed to update auth popup to success state: %s", e)
 
     def _show_burst_selection_dialog(self) -> None:
         """Display a modal dialog with a Table of unique Sentinel-1 bursts in the ROI."""
