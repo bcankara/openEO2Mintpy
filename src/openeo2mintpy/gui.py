@@ -697,9 +697,13 @@ class OpenEO2MintpyApp(tk.Tk):
             from openeo2mintpy.align import align_rasters
             from openeo2mintpy.split import split_openeo_bands
 
-            def progress_cb(current: int, total: int) -> None:
-                pct = (current / total * 100.0) if total else 0.0
-                self._log_queue.put(f"__split_progress__:{pct:.1f}:{current}/{total}")
+            def split_progress_cb(current: int, total: int) -> None:
+                pct = (current / total * 50.0) if total else 0.0
+                self._log_queue.put(f"__split_progress__:{pct:.1f}:Splitting... {current}/{total}")
+
+            def align_progress_cb(current: int, total: int) -> None:
+                pct = 50.0 + (current / total * 50.0) if total else 50.0
+                self._log_queue.put(f"__split_progress__:{pct:.1f}:Aligning... {current}/{total}")
 
             def log_cb(message: str) -> None:
                 self._log_queue.put(message)
@@ -710,7 +714,7 @@ class OpenEO2MintpyApp(tk.Tk):
                 input_dir=openeo_dir,
                 unw_dir=unw_out_dir,
                 cor_dir=cor_out_dir,
-                progress_callback=progress_cb,
+                progress_callback=split_progress_cb,
                 log_callback=log_cb,
             )
 
@@ -734,6 +738,7 @@ class OpenEO2MintpyApp(tk.Tk):
                 unw_dir=unw_out_dir,
                 cor_dir=cor_out_dir,
                 log_callback=log_cb,
+                progress_callback=align_progress_cb,
             )
 
             self._log_queue.put(
@@ -1434,10 +1439,10 @@ class OpenEO2MintpyApp(tk.Tk):
                 if msg.startswith("__split_progress__:"):
                     _, pct, counts = msg.split(":", 2)
                     self.split_progress.configure(value=float(pct))
-                    self.status_var.set(f"Splitting... {counts} ({float(pct):.1f}%)")
+                    self.status_var.set(f"{counts} ({float(pct):.1f}%)")
                 elif msg == "__split_done__:ok":
                     self.split_progress.configure(value=100)
-                    self.status_var.set("Split done.")
+                    self.status_var.set("Split & Align done.")
                     self.split_run_btn.configure(state="normal")
 
                     # Auto-populate the next tab's fields:
@@ -1450,15 +1455,15 @@ class OpenEO2MintpyApp(tk.Tk):
 
                     messagebox.showinfo(
                         "Done",
-                        "openEO bands split successfully!\n\n"
+                        "openEO bands split and aligned successfully!\n\n"
                         "Paths have been auto-populated in the Prepare tab.",
                     )
                 elif msg == "__split_done__:error":
-                    self.status_var.set("Split failed. See log.")
+                    self.status_var.set("Split & Align failed. See log.")
                     self.split_run_btn.configure(state="normal")
                     messagebox.showerror(
-                        "Split failed",
-                        "The band splitting did not complete successfully. See log for details.",
+                        "Split & Align failed",
+                        "The split & align process did not complete successfully. See log for details.",
                     )
                 elif msg == "__dem_done__:ok":
                     self.split_progress.configure(value=100)

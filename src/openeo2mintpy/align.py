@@ -21,6 +21,7 @@ def align_rasters(
     cor_dir: str | Path | None = None,
     resample_alg: str = "bilinear",
     log_callback=None,
+    progress_callback=None,
 ) -> dict:
     """Align all unwrapped phase and coherence GeoTIFFs to a common grid.
 
@@ -206,6 +207,9 @@ def align_rasters(
                 if log_callback:
                     log_callback(err_msg)
                 result["errors"].append({"file": fpath.name, "error": str(e)})
+
+            if progress_callback:
+                progress_callback(idx + 1, len(all_files))
 
     msg = (
         f"Alignment completed: {result['aligned']} files successfully aligned, "
