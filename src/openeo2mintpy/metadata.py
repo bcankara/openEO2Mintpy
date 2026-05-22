@@ -492,7 +492,11 @@ def auto_detect_ref_date(directory):
 
     # The reference date appears in most pairs
     ref_date = max(date_counts, key=date_counts.get)
-    logger.info("Auto-detected reference date: %s (%d occurrences)", ref_date, date_counts[ref_date])
+    logger.info(
+        "Auto-detected reference date: %s (%d occurrences)",
+        ref_date,
+        date_counts[ref_date],
+    )
     return ref_date
 
 
