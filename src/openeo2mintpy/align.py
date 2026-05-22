@@ -298,12 +298,13 @@ def prepare_dem(
     if log_callback:
         log_callback(msg)
 
-    # 2. Gather input tiles (HGT or DEM files)
+    # 2. Gather input tiles (HGT, DEM, or TIF files)
     hgt_files = []
 
     # Check for direct files in the zip directory
     hgt_files.extend(list(zip_dir.glob("*.hgt")) + list(zip_dir.glob("*.dem")))
     hgt_files.extend(list(zip_dir.glob("*.HGT")) + list(zip_dir.glob("*.DEM")))
+    hgt_files.extend(list(zip_dir.glob("*.tif")) + list(zip_dir.glob("*.TIF")))
 
     # Extract from zip files if present
     zip_files = list(zip_dir.glob("*.zip"))
@@ -338,8 +339,8 @@ def prepare_dem(
 
     if not hgt_files:
         raise RuntimeError(
-            f"No .hgt, .dem, or .zip files found in {zip_dir}. "
-            f"Please download the NASADEM files and put them in this folder."
+            f"No .hgt, .dem, .tif, or .zip files found in {zip_dir}. "
+            f"Please place DEM files in this folder."
         )
 
     msg = f"Found {len(hgt_files)} DEM tiles to merge and align."
