@@ -1,0 +1,165 @@
+"""
+User settings persistence for openEO2Mintpy.
+
+Saves and loads project settings from a JSON file so that users
+configure their paths once and reuse them across runs.
+
+Settings file: openeo2mintpy_settings.json (in the current working directory)
+"""
+
+import json
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+SETTINGS_FILENAME = "openeo2mintpy_settings.json"
+
+# All recognized setting keys with descriptions
+SETTINGS_KEYS = {
+    "openeo_backend": "openEO backend URL",
+    "openeo_cwl_url": "openEO CWL workflow URL (empty: published CDSE process)",
+    "openeo_start_date": "openEO query start date (YYYY-MM-DD)",
+    "openeo_end_date": "openEO query end date (YYYY-MM-DD)",
+    "openeo_polarisation": "openEO polarisation (e.g. VV)",
+    "openeo_track": "openEO relative orbit number (track)",
+    "openeo_direction": "openEO pass direction (ASCENDING/DESCENDING)",
+    "openeo_burst_id": "openEO Sentinel-1 burst ID",
+    "openeo_sub_swath": "openEO Sentinel-1 sub swath (IW1/IW2/IW3)",
+    "openeo_bbox_north": "openEO bounding box North (latitude)",
+    "openeo_bbox_south": "openEO bounding box South (latitude)",
+    "openeo_bbox_east": "openEO bounding box East (longitude)",
+    "openeo_bbox_west": "openEO bounding box West (longitude)",
+    "openeo_max_baseline_days": "openEO maximum baseline in days",
+    "openeo_work_dir": "openEO downloaded data working directory",
+    "openeo_job_ids": "openEO submitted Job IDs",
+    "openeo_dir": "openEO raw TIFFs directory",
+    "unw_out_dir": "Output directory for split unwrapped phase (*.unw.tif)",
+    "cor_out_dir": "Output directory for split coherence (*.cor.tif)",
+    "dem_zip_dir": "Directory containing downloaded NASADEM zip/HGT/DEM tiles",
+    "dem_output_file": "Output path for the merged & aligned DEM GeoTIFF",
+    "unw_dir": "Unwrapped interferograms directory (*.unw.tif)",
+    "cor_dir": "Coherence files directory (*.cor.tif)",
+    "conncomp_dir": "Connected component files directory",
+    "stack_metadata": "stack_metadata.json from the orbit metadata step",
+    "dem_file": "DEM file on the stack grid (dem.tif)",
+    "inc_angle_file": "Incidence angle file (incidenceAngle.tif)",
+    "az_angle_file": "Azimuth angle file (azimuthAngle.tif)",
+    "water_mask_file": "Water mask file (optional)",
+    "mintpy_processor": "mintpy.load.processor value (isce / hyp3)",
+    "work_dir": "MintPy working/output directory",
+    "geometry_mode": "Geometry mode for .rsc sidecars (auto/radar/geo)",
+}
+
+
+def find_settings_file(search_dir=None):
+    """Find the settings file in the given or current directory.
+
+    Parameters
+    ----------
+    search_dir : str or Path, optional
+        Directory to search for settings. Defaults to cwd.
+
+    Returns
+    -------
+    Path or None
+        Path to settings file if found, None otherwise.
+    """
+    search_dir = Path(search_dir) if search_dir else Path.cwd()
+    settings_path = search_dir / SETTINGS_FILENAME
+    if settings_path.exists():
+        return settings_path
+    return None
+
+
+def load_settings(settings_path=None):
+    """Load settings from a JSON file.
+
+    Parameters
+    ----------
+    settings_path : str or Path, optional
+        Path to settings file. If None, searches current directory.
+
+    Returns
+    -------
+    dict
+        Settings dictionary. Empty dict if file not found.
+    """
+    if settings_path is None:
+        settings_path = find_settings_file()
+
+    if settings_path is None:
+        return {}
+
+    settings_path = Path(settings_path)
+    if not settings_path.exists():
+        return {}
+
+    try:
+        with open(settings_path, encoding="utf-8") as f:
+            data = json.load(f)
+        logger.info("Loaded settings from: %s", settings_path)
+        return data
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Could not load settings from %s: %s", settings_path, e)
+        return {}
+
+
+def save_settings(settings, settings_path=None):
+    """Save settings to a JSON file.
+
+    Parameters
+    ----------
+    settings : dict
+        Settings to save.
+    settings_path : str or Path, optional
+        Path to write. Defaults to cwd/openeo2mintpy_settings.json.
+
+    Returns
+    -------
+    Path
+        Path to the saved settings file.
+    """
+    if settings_path is None:
+        settings_path = Path.cwd() / SETTINGS_FILENAME
+
+    settings_path = Path(settings_path)
+
+    # Convert Path objects to strings for JSON serialization
+    serializable = {}
+    for key, value in settings.items():
+        if isinstance(value, Path):
+            serializable[key] = str(value)
+        elif value is not None:
+            serializable[key] = value
+
+    with open(settings_path, "w", encoding="utf-8") as f:
+        json.dump(serializable, f, indent=2, ensure_ascii=False)
+
+    logger.info("Settings saved to: %s", settings_path)
+    return settings_path
+
+
+def format_settings_display(settings):
+    """Format settings for terminal display.
+
+    Parameters
+    ----------
+    settings : dict
+        Settings dictionary.
+
+    Returns
+    -------
+    str
+        Formatted multi-line string.
+    """
+    lines = []
+    for key, description in SETTINGS_KEYS.items():
+        value = settings.get(key)
+        if value:
+            lines.append(f"    {description}:")
+            lines.append(f"      {value}")
+        else:
+            lines.append(f"    {description}:")
+            lines.append("      (not set)")
+    return "\n".join(lines)

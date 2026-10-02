@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "openEO2Mintpy"
+abstract: >-
+  openEO2Mintpy prepares geocoded Sentinel-1 interferograms from the Copernicus
+  Data Space Ecosystem (CDSE) openEO service for MintPy small-baseline time-series
+  analysis. It reconstructs the per-date perpendicular baselines and the per-pixel
+  viewing geometry from the product names, the public CDSE burst catalogue, the
+  Sentinel-1 precise orbits and a digital elevation model.
+type: software
+authors:
+  - family-names: "Kara"
+    given-names: "Burak Can"
+    orcid: "https://orcid.org/0000-0002-6933-0759"
+    affiliation: "Department of Construction, Merzifon Vocational School, Amasya University, Amasya, 05000, Türkiye"
+version: "1.0.0"
+license: MIT
+repository-code: "https://github.com/bcankara/openEO2Mintpy"
+keywords:
+  - InSAR
+  - Sentinel-1
+  - openEO
+  - Copernicus Data Space Ecosystem
+  - MintPy
+  - small baseline
+  - precise orbits

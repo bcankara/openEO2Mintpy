@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="404" viewBox="0 0 1000 404" role="img" aria-labelledby="t d" font-family="Helvetica, Arial, sans-serif">
+  <title id="t">openEO2Mintpy method overview</title>
+  <desc id="d">Open inputs (openEO interferograms, CDSE burst catalogue, Sentinel-1 precise orbits, a DEM) feed a value-preserving preparation and a zero-Doppler geometry solution; the result is a stack with metadata and geometry rasters that MintPy analyses as small-baseline time series. The SNAP header cross-check applies to products of the current CDSE process.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4d4d4d"/>
+    </marker>
+  </defs>
+
+  <!-- card background (keeps the figure readable in dark mode) -->
+  <rect x="1" y="1" width="998" height="402" rx="14" fill="#ffffff" stroke="#d0d7de"/>
+
+  <!-- group panels -->
+  <rect x="14" y="40" width="250" height="350" rx="12" fill="#f3f9fd"/>
+  <rect x="288" y="40" width="284" height="350" rx="12" fill="#f0f8f5"/>
+  <rect x="596" y="40" width="214" height="350" rx="12" fill="#fef8ee"/>
+  <rect x="834" y="40" width="152" height="350" rx="12" fill="#eff5fa"/>
+
+  <!-- group badges -->
+  <g font-size="12" font-weight="bold" fill="#1a1a1a">
+    <rect x="24" y="14" width="96" height="22" rx="11" fill="#e1f2fc" stroke="#56B4E9" stroke-width="1.2"/>
+    <text x="72" y="29" text-anchor="middle">Open inputs</text>
+    <rect x="298" y="14" width="112" height="22" rx="11" fill="#d9f0e8" stroke="#009E73" stroke-width="1.2"/>
+    <text x="354" y="29" text-anchor="middle">openEO2Mintpy</text>
+    <rect x="606" y="14" width="122" height="22" rx="11" fill="#fcefd6" stroke="#E69F00" stroke-width="1.2"/>
+    <text x="667" y="29" text-anchor="middle">Stack for MintPy</text>
+    <rect x="844" y="14" width="70" height="22" rx="11" fill="#dcebf6" stroke="#0072B2" stroke-width="1.2"/>
+    <text x="879" y="29" text-anchor="middle">MintPy</text>
+  </g>
+
+  <!-- inputs -->
+  <g stroke="#56B4E9" stroke-width="1.2" fill="#e1f2fc">
+    <rect x="24" y="54" width="230" height="74" rx="8"/>
+    <rect x="24" y="140" width="230" height="74" rx="8"/>
+    <rect x="24" y="226" width="230" height="74" rx="8"/>
+    <rect x="24" y="312" width="230" height="68" rx="8"/>
+  </g>
+  <g fill="#1a1a1a" font-size="14" font-weight="bold">
+    <text x="36" y="76">openEO interferograms</text>
+    <text x="36" y="162">CDSE burst catalogue</text>
+    <text x="36" y="248">Sentinel-1 precise orbits</text>
+    <text x="36" y="334">Digital elevation model</text>
+  </g>
+  <g fill="#555555" font-size="12">
+    <text x="36" y="96">unwrapped phase and coherence;</text>
+    <text x="36" y="112">acquisition times in file names</text>
+    <text x="36" y="182">platform, orbit direction,</text>
+    <text x="36" y="198">relative orbit, burst time</text>
+    <text x="36" y="268">AUX_POEORB from the public</text>
+    <text x="36" y="284">ASF s1-orbits bucket</text>
+    <text x="36" y="354">NASADEM tiles or a GeoTIFF</text>
+  </g>
+
+  <!-- openEO2Mintpy -->
+  <rect x="298" y="54" width="264" height="74" rx="8" fill="#d9f0e8" stroke="#009E73" stroke-width="1.2"/>
+  <rect x="298" y="150" width="264" height="120" rx="8" fill="#d9f0e8" stroke="#009E73" stroke-width="1.2"/>
+  <rect x="298" y="296" width="264" height="84" rx="8" fill="#ffffff" stroke="#009E73" stroke-width="1.2" stroke-dasharray="5 4"/>
+  <g fill="#1a1a1a" font-size="14" font-weight="bold">
+    <text x="310" y="76">Value-preserving preparation</text>
+    <text x="310" y="172">Zero-Doppler geometry</text>
+    <text x="310" y="318">SNAP header cross-check</text>
+  </g>
+  <g fill="#555555" font-size="12">
+    <text x="310" y="96">bands split by copying; rasters</text>
+    <text x="310" y="112">cropped to a common grid</text>
+    <text x="310" y="194">per date: perpendicular baseline</text>
+    <text x="310" y="212">per pixel: incidence angle,</text>
+    <text x="310" y="228">azimuth angle, slant range</text>
+    <text x="310" y="246">per scene: heading,</text>
+    <text x="310" y="262">centre-line time</text>
+    <text x="310" y="338">optional, current CDSE process:</text>
+    <text x="310" y="354">baselines embedded by SNAP</text>
+    <text x="310" y="370">compared with the solution</text>
+  </g>
+
+  <!-- stack for MintPy -->
+  <rect x="606" y="54" width="194" height="326" rx="8" fill="#fcefd6" stroke="#E69F00" stroke-width="1.2"/>
+  <g font-size="12.5" font-weight="bold" fill="#1a1a1a">
+    <text x="618" y="80">unw/, cor/</text>
+    <text x="618" y="150">geometry/</text>
+    <text x="618" y="220">stack_metadata.json</text>
+    <text x="618" y="290">mintpy_config.txt</text>
+  </g>
+  <g fill="#555555" font-size="12">
+    <text x="618" y="98">rasters with .rsc metadata</text>
+    <text x="618" y="114">for every pair</text>
+    <text x="618" y="168">DEM, incidence and</text>
+    <text x="618" y="184">azimuth angle rasters</text>
+    <text x="618" y="238">baselines, orbit files and</text>
+    <text x="618" y="254">scene attributes</text>
+    <text x="618" y="308">DEM-error step enabled</text>
+    <text x="618" y="324">only with baselines</text>
+  </g>
+
+  <!-- MintPy -->
+  <rect x="844" y="150" width="132" height="120" rx="8" fill="#dcebf6" stroke="#0072B2" stroke-width="1.2"/>
+  <g fill="#1a1a1a" font-size="14" font-weight="bold">
+    <text x="856" y="172">Small-baseline</text>
+    <text x="856" y="190">time series</text>
+  </g>
+  <g fill="#555555" font-size="12">
+    <text x="856" y="212">DEM error,</text>
+    <text x="856" y="228">ERA5 troposphere,</text>
+    <text x="856" y="244">line of sight</text>
+  </g>
+
+  <!-- connectors: solid = main flow, dashed = optional -->
+  <g stroke="#4d4d4d" stroke-width="1.4" fill="none">
+    <path d="M254 91 H296" marker-end="url(#arrow)"/>
+    <path d="M254 177 H276 M254 263 H276 M254 346 H276 M276 91 V346"/>
+    <path d="M276 210 H296" marker-end="url(#arrow)"/>
+    <path d="M562 91 H604" marker-end="url(#arrow)"/>
+    <path d="M562 210 H604" marker-end="url(#arrow)"/>
+    <path d="M800 210 H842" marker-end="url(#arrow)"/>
+    <path d="M430 270 V294" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+  </g>
+  <g fill="#4d4d4d">
+    <circle cx="276" cy="91" r="2.6"/>
+    <circle cx="276" cy="210" r="2.6"/>
+  </g>
+</svg>
